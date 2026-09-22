@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cold_emailer}
+      POSTGRES_USER: ${POSTGRES_USER:-cold_emailer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-6543}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+  migrate:
+    build: .
+    image: cold-emailer-app
+    command: npm run db:deploy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    image: cold-emailer-app
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?Set SETTINGS_ENCRYPTION_KEY}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${APP_PORT:-3000}:3000"
+
+  seed:
+    image: cold-emailer-app
+    profiles: [tools]
+    command: npm run db:seed
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      SUPER_ADMIN_NAME: ${SUPER_ADMIN_NAME:-Super Admin}
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+volumes:
+  postgres_data:
