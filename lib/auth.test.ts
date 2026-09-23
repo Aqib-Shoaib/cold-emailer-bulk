@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { digest, isSameOrigin, loginThrottleKey, normalizeEmail } from "./auth.ts";
+import { digest, isSameOrigin, loginThrottleKey, normalizeEmail, requestOrigin } from "./auth.ts";
 
 test("normalizes email and creates stable non-plain throttle keys", () => {
   assert.equal(normalizeEmail(" Admin@Example.COM "), "admin@example.com");
@@ -20,4 +20,5 @@ test("accepts only matching request origins", () => {
 
   assert.equal(isSameOrigin(request("https://app.example.com") as never), true);
   assert.equal(isSameOrigin(request("https://evil.example") as never), false);
+  assert.equal(requestOrigin(request("https://app.example.com") as never), "https://app.example.com");
 });

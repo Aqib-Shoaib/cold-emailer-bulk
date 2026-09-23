@@ -290,15 +290,15 @@ test containers and volume were removed.
 
 **Acceptance:**
 
-- [ ] An unauthenticated request cannot access pages, data routes, or worker controls.
+- [x] An unauthenticated request cannot access pages, data routes, or worker controls.
 - [ ] Login, logout, expiry, password change, and recovery each pass.
-- [ ] A revoked session stops working immediately.
-- [ ] The seed creates exactly one `SUPER_ADMIN` without hardcoded credentials.
-- [ ] Users created in the panel are always `ADMIN`.
-- [ ] `ADMIN` and `SUPER_ADMIN` can use the same product features.
-- [ ] Only `SUPER_ADMIN` can deactivate/delete another user.
-- [ ] The sole `SUPER_ADMIN` cannot be deactivated or deleted.
-- [ ] No generic roles, permissions, or policy framework was added.
+- [x] A revoked session stops working immediately.
+- [x] The seed creates exactly one `SUPER_ADMIN` without hardcoded credentials.
+- [x] Users created in the panel are always `ADMIN`.
+- [x] `ADMIN` and `SUPER_ADMIN` can use the same product features.
+- [x] Only `SUPER_ADMIN` can deactivate/delete another user.
+- [x] The sole `SUPER_ADMIN` cannot be deactivated or deleted.
+- [x] No generic roles, permissions, or policy framework was added.
 
 **Evidence:** 2026-09-23 — Added protected workspace routes, database-backed
 opaque sessions with hashed tokens, secure HTTP-only cookies, logout with
@@ -306,7 +306,11 @@ immediate server-side revocation, and persistent login throttling. Prisma
 validation/client generation, unit tests, TypeScript, ESLint, and diff checks
 pass. A Docker production build and both migrations passed against an isolated
 PostgreSQL 18 database; its containers and volume were then removed. Email OTP
-delivery remains dependent on the Phase 3 SMTP settings source.
+delivery remains dependent on the Phase 3 SMTP settings source. Added real user
+management, password changes, revoke-other-sessions, audit events, and mobile
+logout. An isolated Docker test verified unauthenticated redirects, login/logout,
+admin creation, admin authorization denial, super-admin protection, password
+change, audit records, and immediate session revocation after deactivation.
 
 ---
 

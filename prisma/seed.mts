@@ -1,5 +1,5 @@
 import { UserRole } from "../generated/prisma/enums.ts";
-import { hashPassword } from "../lib/password.ts";
+import { hashPassword, isValidPassword } from "../lib/password.ts";
 import { getPrisma } from "../lib/prisma.ts";
 
 const name = required("SUPER_ADMIN_NAME");
@@ -8,8 +8,8 @@ const password = required("SUPER_ADMIN_PASSWORD");
 const prisma = getPrisma();
 
 if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error("SUPER_ADMIN_EMAIL is invalid");
-if (password.length < 12) {
-  throw new Error("SUPER_ADMIN_PASSWORD must contain at least 12 characters");
+if (!isValidPassword(password)) {
+  throw new Error("SUPER_ADMIN_PASSWORD must contain 12 to 200 characters");
 }
 
 const existing = await prisma.user.findFirst({

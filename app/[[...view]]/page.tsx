@@ -21,8 +21,11 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/auth";
+import { getPrisma } from "@/lib/prisma";
 
 const validViews = new Set([
   "dashboard",
@@ -37,8 +40,10 @@ const validViews = new Set([
 
 export default async function WorkspacePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ view?: string[] }>;
+  searchParams: Promise<{ notice?: string; error?: string }>;
 }) {
   const segments = (await params).view;
   const view = segments?.[0] ?? "dashboard";
@@ -52,7 +57,7 @@ export default async function WorkspacePage({
     templates: <TemplatesView />,
     inbox: <InboxView />,
     knowledge: <KnowledgeView />,
-    users: <UsersView />,
+    users: <UsersView feedback={await searchParams} />,
     settings: <SettingsView />,
   }[view];
 }
@@ -288,13 +293,25 @@ function KnowledgeView() {
   );
 }
 
-function UsersView() {
+async function UsersView({ feedback }: { feedback: { notice?: string; error?: string } }) {
+  const cookieStore = await cookies();
+  const currentUser = await getSessionUser(cookieStore.get(SESSION_COOKIE)?.value);
+  if (!currentUser) return null;
+
+  const users = await getPrisma().user.findMany({ orderBy: { createdAt: "asc" } });
+  const activeCount = users.filter((user) => user.active).length;
+  const message = feedbackMessage(feedback);
+
   return (
     <Page>
-      <PageHeader title="Users" description="Admins share product access. Only the super admin can deactivate or delete users." action={<PrimaryButton><UserPlus size={17} />Add admin</PrimaryButton>} />
+      <PageHeader title="Users" description="Admins share product access. Only the super admin can deactivate or delete users." />
+      {message ? <p role={feedback.error ? "alert" : "status"} className={`rounded-xl px-4 py-3 text-sm ${feedback.error ? "bg-[var(--danger-soft)] text-[var(--danger)]" : "bg-[var(--accent-soft)] text-[var(--accent-strong)]"}`}>{message}</p> : null}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
-        <Panel className="p-0"><div className="p-5 sm:p-6"><SectionTitle title="Workspace users" description="Two active users can access this workspace." /></div><div className="border-t"><UserRow initials="SA" name="Super Admin" email="admin@company.com" role="Super admin" active /><UserRow initials="AN" name="Areeba Noor" email="areeba@company.com" role="Admin" active /></div></Panel>
-        <Panel><SectionTitle title="Add an admin" description="Set an initial password and share it with the user yourself." /><div className="mt-5 space-y-4"><Field label="Full name" hint="Shown in activity and account menus"><input className="input" placeholder="Enter full name" /></Field><Field label="Email address" hint="Used to sign in"><input className="input" type="email" placeholder="name@company.com" /></Field><Field label="Initial password" hint="Use at least 12 characters"><input className="input" type="password" placeholder="Enter a secure password" /></Field><PrimaryButton className="w-full justify-center">Create admin</PrimaryButton></div></Panel>
+        <Panel className="p-0"><div className="p-5 sm:p-6"><SectionTitle title="Workspace users" description={`${activeCount} active ${activeCount === 1 ? "user can" : "users can"} access this workspace.`} /></div><div className="border-t">{users.map((user) => <UserRow key={user.id} id={user.id} name={user.name} email={user.email} role={user.role} active={user.active} canManage={currentUser.role === "SUPER_ADMIN" && user.role === "ADMIN"} />)}</div></Panel>
+        <div className="space-y-5">
+          {currentUser.role === "SUPER_ADMIN" ? <Panel><SectionTitle title="Add an admin" description="Set an initial password and share it with the user yourself." /><form action="/api/users/create" method="post" className="mt-5 space-y-4"><Field label="Full name" hint="Shown in activity and account menus"><input className="input" name="name" minLength={2} maxLength={120} autoComplete="name" placeholder="Enter full name" required /></Field><Field label="Email address" hint="Used to sign in"><input className="input" name="email" type="email" maxLength={320} autoComplete="email" placeholder="name@company.com" required /></Field><Field label="Initial password" hint="Use 12 to 200 characters"><input className="input" name="password" type="password" minLength={12} maxLength={200} autoComplete="new-password" placeholder="Enter a secure password" required /></Field><button type="submit" className={`${buttonClass(true)} w-full justify-center`}><UserPlus size={17} />Create admin</button></form></Panel> : null}
+          <Panel><SectionTitle title="Your security" description="Change your password or sign out other browser sessions." /><form action="/api/account/change-password" method="post" className="mt-5 space-y-4"><Field label="Current password" hint="Confirms this sensitive change"><input className="input" name="currentPassword" type="password" autoComplete="current-password" required /></Field><Field label="New password" hint="Use 12 to 200 characters"><input className="input" name="newPassword" type="password" minLength={12} maxLength={200} autoComplete="new-password" required /></Field><Field label="Confirm new password" hint="Enter the same new password again"><input className="input" name="confirmation" type="password" minLength={12} maxLength={200} autoComplete="new-password" required /></Field><button type="submit" className={`${buttonClass(true)} w-full justify-center`}>Change password</button></form><details className="mt-5 border-t pt-4"><summary className="cursor-pointer text-sm font-semibold">Sign out other sessions</summary><p className="mt-2 text-xs leading-5 text-[var(--muted)]">This immediately signs your account out everywhere except this browser.</p><form action="/api/account/revoke-sessions" method="post"><button type="submit" className={`${buttonClass(false)} mt-3`}>Confirm sign out</button></form></details></Panel>
+        </div>
       </div>
     </Page>
   );
@@ -408,6 +425,7 @@ function Message({ sender, time, incoming = false, children }: { sender: string;
 function SourceRow({ icon, name, detail, status }: { icon: ReactNode; name: string; detail: string; status: string }) { return <div className="flex items-center gap-3 border-b px-5 py-4 last:border-0 sm:px-6"><span className="grid size-10 place-items-center rounded-xl bg-[var(--surface-soft)] text-[var(--muted)]">{icon}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{name}</p><p className="mt-1 truncate text-xs text-[var(--muted)]">{detail}</p></div><Status value={status} /></div>; }
 function GroundedSource({ name, relevance }: { name: string; relevance: string }) { return <div className="rounded-xl bg-[var(--surface-raised)] p-3"><p className="text-sm font-medium">{name}</p><p className="mt-1 text-xs text-[var(--muted)]">{relevance}</p></div>; }
 function EmptyState({ icon, title, body, action }: { icon: ReactNode; title: string; body: string; action: string }) { return <Panel className="flex flex-col items-center py-10 text-center"><span className="grid size-12 place-items-center rounded-2xl bg-[var(--surface-soft)] text-[var(--muted)]">{icon}</span><h2 className="mt-4 font-semibold">{title}</h2><p className="mt-2 max-w-md text-sm leading-6 text-[var(--muted)]">{body}</p><SecondaryButton className="mt-5">{action}</SecondaryButton></Panel>; }
-function UserRow({ initials, name, email, role, active }: { initials: string; name: string; email: string; role: string; active: boolean }) { return <div className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0 sm:px-6"><span className="grid size-10 place-items-center rounded-xl bg-[var(--accent-soft)] text-xs font-semibold text-[var(--accent-strong)]">{initials}</span><div className="min-w-0 flex-1"><p className="text-sm font-medium">{name}</p><p className="mt-1 truncate text-xs text-[var(--muted)]">{email}</p></div><Status value={role} /><span className="text-xs text-[var(--accent-strong)]">{active ? "Active" : "Inactive"}</span></div>; }
+function UserRow({ id, name, email, role, active, canManage }: { id: string; name: string; email: string; role: "SUPER_ADMIN" | "ADMIN"; active: boolean; canManage: boolean }) { return <div className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0 sm:px-6"><Avatar name={name} /><div className="min-w-0 flex-1"><p className="text-sm font-medium">{name}</p><p className="mt-1 truncate text-xs text-[var(--muted)]">{email}</p></div><Status value={role === "SUPER_ADMIN" ? "Super admin" : "Admin"} /><span className={`text-xs ${active ? "text-[var(--accent-strong)]" : "text-[var(--danger)]"}`}>{active ? "Active" : "Inactive"}</span>{canManage ? active ? <details className="w-full rounded-xl bg-[var(--surface-soft)] p-3 sm:w-auto"><summary className="cursor-pointer text-xs font-semibold">Manage</summary><p className="mt-2 text-xs text-[var(--muted)]">Deactivation signs this user out immediately. Deletion is permanent.</p><div className="mt-3 flex flex-wrap gap-2"><form action="/api/users/deactivate" method="post"><input type="hidden" name="userId" value={id} /><button type="submit" className={buttonClass(false)}>Deactivate</button></form><form action="/api/users/delete" method="post"><input type="hidden" name="userId" value={id} /><button type="submit" className="inline-flex min-h-10 items-center rounded-xl border border-[var(--danger)] px-3.5 py-2 text-sm font-semibold text-[var(--danger)]">Delete permanently</button></form></div></details> : <form action="/api/users/activate" method="post"><input type="hidden" name="userId" value={id} /><button type="submit" className={buttonClass(false)}>Reactivate</button></form> : null}</div>; }
+function feedbackMessage({ notice, error }: { notice?: string; error?: string }) { if (error === "forbidden") return "Only the super admin can manage users."; if (error === "security") return "The security change could not be completed. Check the passwords and try again."; if (error === "invalid") return "The user change could not be completed. Check the details and try again."; if (notice === "created") return "Admin created successfully."; if (notice === "updated") return "Admin access updated."; if (notice === "deleted") return "Admin deleted permanently."; if (notice === "security-updated") return "Security settings updated."; return null; }
 function Field({ label, hint, children }: { label: string; hint: string; children: ReactNode }) { return <label className="block"><span className="flex items-center gap-1.5 text-sm font-medium">{label}<Info size={14} className="text-[var(--subtle)]" aria-label={hint} /></span><span className="mt-1 block text-xs leading-5 text-[var(--muted)]">{hint}</span><span className="mt-2 block">{children}</span></label>; }
 function SettingField({ label, hint, type, value }: { label: string; hint: string; type: string; value: string }) { return <Field label={label} hint={hint}>{type === "select" ? <select className="input" defaultValue={value}><option>{value}</option><option>Configure later</option></select> : <input className="input" type={type === "password" ? "password" : type === "number" ? "text" : type} defaultValue={value} placeholder={type === "password" ? "Not configured" : "Enter a value"} />}</Field>; }

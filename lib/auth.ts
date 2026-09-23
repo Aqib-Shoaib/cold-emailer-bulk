@@ -31,6 +31,10 @@ export function isSameOrigin(request: NextRequest) {
   }
 }
 
+export function requestOrigin(request: NextRequest) {
+  return request.headers.get("origin") ?? request.nextUrl.origin;
+}
+
 export async function isLoginBlocked(email: string) {
   const throttle = await getPrisma().authThrottle.findUnique({
     where: { key: loginThrottleKey(email) },
@@ -89,6 +93,12 @@ export async function getSessionUser(token: string | undefined) {
   }
 
   return session.user;
+}
+
+export async function getRequestSession(request: NextRequest) {
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  const user = await getSessionUser(token);
+  return user && token ? { user, token, tokenHash: digest(token) } : null;
 }
 
 export async function revokeSession(token: string | undefined) {

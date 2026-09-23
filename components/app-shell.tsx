@@ -142,6 +142,11 @@ export function AppShell({ children, user }: { children: ReactNode; user: { name
                 />
               ))}
             </nav>
+            <div className="mt-auto flex items-center gap-3 border-t border-white/10 px-2 pt-4">
+              <span className="grid size-9 place-items-center rounded-xl bg-[var(--accent)] text-sm font-semibold text-white">{initials(user.name)}</span>
+              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{user.name}</span><span className="block truncate text-xs text-[var(--sidebar-muted)]">{user.role === "SUPER_ADMIN" ? "Workspace owner" : "Administrator"}</span></span>
+              <form action="/api/auth/logout" method="post"><button type="submit" className="rounded-lg px-2 py-1 text-xs text-[var(--sidebar-muted)] hover:bg-white/10 hover:text-white">Sign out</button></form>
+            </div>
           </aside>
         </div>
       )}

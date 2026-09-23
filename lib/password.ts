@@ -4,6 +4,10 @@ import { promisify } from "node:util";
 const scrypt = promisify(scryptCallback);
 const KEY_LENGTH = 64;
 
+export function isValidPassword(password: string) {
+  return password.length >= 12 && password.length <= 200;
+}
+
 export async function hashPassword(password: string) {
   const salt = randomBytes(16);
   const key = (await scrypt(password, salt, KEY_LENGTH)) as Buffer;
