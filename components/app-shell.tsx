@@ -30,7 +30,7 @@ const navigation = [
   { href: "/settings", label: "Settings", icon: GearSix },
 ];
 
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({ children, user }: { children: ReactNode; user: { name: string; role: "SUPER_ADMIN" | "ADMIN" } }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -58,14 +58,17 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
         <div className="mt-4 flex items-center gap-3 px-2 py-2">
           <span className="grid size-9 place-items-center rounded-xl bg-[var(--accent)] text-sm font-semibold text-white">
-            SA
+            {initials(user.name)}
           </span>
           <span className="min-w-0">
-            <span className="block truncate text-sm font-medium">Super Admin</span>
+            <span className="block truncate text-sm font-medium">{user.name}</span>
             <span className="block truncate text-xs text-[var(--sidebar-muted)]">
-              Workspace owner
+              {user.role === "SUPER_ADMIN" ? "Workspace owner" : "Administrator"}
             </span>
           </span>
+          <form action="/api/auth/logout" method="post" className="ml-auto">
+            <button type="submit" className="rounded-lg px-2 py-1 text-xs text-[var(--sidebar-muted)] hover:bg-white/10 hover:text-white" title="Sign out">Sign out</button>
+          </form>
         </div>
       </aside>
 
@@ -144,6 +147,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       )}
     </div>
   );
+}
+
+function initials(name: string) {
+  return name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 }
 
 function Brand() {

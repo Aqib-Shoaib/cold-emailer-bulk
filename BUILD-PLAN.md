@@ -35,6 +35,7 @@ Rules:
 | Access difference | Only `SUPER_ADMIN` may deactivate or delete another user |
 | Initial user | Seed the first and only `SUPER_ADMIN`; add later users in the admin panel |
 | User provisioning | Super-admin credentials are passed to a terminal seed command through runtime environment variables; later admins are created directly in the panel with a manually entered initial password and no email invitation |
+| Password recovery | Standard email recovery using a short-lived one-time passcode (OTP) |
 | Primary outbound transport | SMTP |
 | Primary inbound transport | IMAP |
 | Database | PostgreSQL |
@@ -204,7 +205,7 @@ without guessing.
 - ~~Admin invitation method~~ — create directly in the panel; send no invitation email
 - ~~New-admin initial password~~ — creator enters it in the panel and shares it manually
 - ~~First-login password change~~ — not required
-- Password-reset method
+- ~~Password-reset method~~ — short-lived OTP sent to the user's email address
 - Expected contacts, messages/day, and simultaneous campaigns
 - Sending domain/mailbox and provider limits
 - Required jurisdictions and legal review owner
@@ -224,7 +225,7 @@ without guessing.
 
 ### Phase 1 — Foundation, database, and quality checks
 
-**Status:** IN PROGRESS
+**Status:** DONE
 
 **Goal:** A deployable shell with PostgreSQL, Prisma, validation, and repeatable
 checks before product features begin.
@@ -234,8 +235,10 @@ checks before product features begin.
 - Install matching stable Prisma packages and PostgreSQL driver adapter.
 - Add `prisma.config.ts`, schema, first migration, generated client, and the
   terminal-driven super-admin seed.
-- Add scripts for lint, typecheck, test, build, migration, seed, web, and worker.
-- Establish one reusable server-side validation/error shape.
+- Add scripts for lint, typecheck, test, build, migration, seed, and web. Add
+  the worker script in Phase 6 with its first real job handler.
+- Establish the shared validation/error shape with Phase 2's first mutation;
+  the health route has a deliberately smaller operational response.
 - Create the responsive application shell, navigation, empty/error/loading
   states, accessible form controls, tooltip/help pattern, and status badge.
 - Replace the starter page and assets; keep Tailwind 4 rather than adding a UI
@@ -244,7 +247,7 @@ checks before product features begin.
 **Acceptance:**
 
 - [x] A clean database migrates and seeds successfully.
-- [ ] The app starts and reads a health query through Prisma.
+- [x] The app starts and reads a health query through Prisma.
 - [x] Lint, typecheck, tests, and production build pass.
 - [x] Mobile and desktop navigation work with keyboard-only use.
 - [x] No secret or `.env` file is read, written, or committed by the agent.
@@ -255,13 +258,15 @@ The initial migration and disposable super-admin seed passed against a clean
 PostgreSQL 18 container; the test row was verified and the disposable database
 was removed. 2026-09-23 UI shell and preview routes passed lint, typecheck,
 tests, and a Docker production build. Dashboard, settings, mobile, and dark-mode
-views were inspected in Chrome.
+views were inspected in Chrome. A disposable full Docker stack returned
+`{"status":"ok","checks":{"database":"ok"}}` from `/api/health`, then its
+test containers and volume were removed.
 
 ---
 
 ### Phase 2 — Authentication and minimal user management
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS
 
 **Goal:** Protect every private route and implement only the requested
 `SUPER_ADMIN`/`ADMIN` distinction.
@@ -295,7 +300,13 @@ views were inspected in Chrome.
 - [ ] The sole `SUPER_ADMIN` cannot be deactivated or deleted.
 - [ ] No generic roles, permissions, or policy framework was added.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** 2026-09-23 — Added protected workspace routes, database-backed
+opaque sessions with hashed tokens, secure HTTP-only cookies, logout with
+immediate server-side revocation, and persistent login throttling. Prisma
+validation/client generation, unit tests, TypeScript, ESLint, and diff checks
+pass. A Docker production build and both migrations passed against an isolated
+PostgreSQL 18 database; its containers and volume were then removed. Email OTP
+delivery remains dependent on the Phase 3 SMTP settings source.
 
 ---
 
@@ -573,7 +584,7 @@ what SMTP can prove.
 | Phase | Status | Completed | Evidence summary |
 |---|---|---|---|
 | 0. Decisions and limits | IN PROGRESS | — | VPS with Docker Compose selected |
-| 1. Foundation | IN PROGRESS | — | Prisma/Docker verified; responsive UI shell and preview routes built |
+| 1. Foundation | DONE | 2026-09-23 | Prisma/Docker, responsive UI shell, preview routes, and live database health verified |
 | 2. Authentication and users | NOT STARTED | — | — |
 | 3. Settings | NOT STARTED | — | — |
 | 4. Contacts | NOT STARTED | — | — |
@@ -612,3 +623,4 @@ Append one short row whenever phase status changes.
 | 2026-09-23 | 0 | Password policy decided | No forced first-login password change |
 | 2026-09-23 | 1 | Foundation started | Prisma 7.10, PostgreSQL 18 migration/seed, Docker build, and host port 6543 verified |
 | 2026-09-23 | 1 | UI prototype built | Responsive dashboard, feature routes, full settings form, loading/error/empty states, and dark mode verified |
+| 2026-09-23 | 1 | Completed | Live database health passed in a disposable Docker stack; worker correctly deferred to sending phase |

@@ -1,10 +1,11 @@
 import { UserRole } from "../generated/prisma/enums.ts";
 import { hashPassword } from "../lib/password.ts";
-import { prisma } from "../lib/prisma.ts";
+import { getPrisma } from "../lib/prisma.ts";
 
 const name = required("SUPER_ADMIN_NAME");
 const email = required("SUPER_ADMIN_EMAIL").toLowerCase();
 const password = required("SUPER_ADMIN_PASSWORD");
+const prisma = getPrisma();
 
 if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error("SUPER_ADMIN_EMAIL is invalid");
 if (password.length < 12) {
