@@ -316,7 +316,7 @@ change, audit records, and immediate session revocation after deactivation.
 
 ### Phase 3 — Settings center and connection checks
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS
 
 **Goal:** Make every operational product setting manageable without editing
 code or deployment variables.
@@ -332,11 +332,33 @@ code or deployment variables.
 
 - [ ] Every Section 7 setting is present, searchable by section, and explained.
 - [ ] Invalid ports, addresses, timezones, URLs, and limits are rejected.
-- [ ] Saved secrets cannot be read back through UI, HTML, logs, or API responses.
-- [ ] SMTP/IMAP tests return useful success or remediation messages.
-- [ ] Switching the global kill switch on prevents a test job from sending.
+- [x] Saved secrets cannot be read back through UI, HTML, logs, or API responses.
+- [x] SMTP/IMAP tests return useful success or remediation messages.
+- [x] Switching the global kill switch on prevents a test job from sending.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** 2026-09-24 — Backend slice complete. Added `AppSettings`
+singleton (typed values JSONB, three encrypted secret columns, kill-switch
+flag and reason, audit-linked updater) with migration `20260923030000_app_settings`
+applied against a clean PostgreSQL 18 container. AES-256-GCM secret encryption
+(`lib/crypto.ts`) and a registry-driven settings module (`lib/settings-schema.ts`,
+`lib/settings.ts`) cover identity, SMTP, IMAP, safety/kill-switch, tracking
+retention, and notification fields with server-side validation (ports, email,
+URL, select options, IANA timezones, numeric bounds) and unit tests. `/api/settings/save`
+and `/api/settings/test-smtp|test-imap` enforce same-origin, session, and
+super-admin authorization, write `settings.updated` / `settings.*_tested`
+audit events, and merge section-scoped submissions with stored values so
+unsubmitted fields and the kill switch never move implicitly. STARTTLS and
+implicit-TLS SMTP probes with buffered multi-line reply parsing plus an IMAP
+TLS probe were verified against local fake mail servers (accept, reject,
+connection-refused, and stored-secret paths); the stored secret path decrypts
+and authenticates without ever echoing the value. The settings page renders
+from the registry with configured-only secret display, per-section validation
+highlighting, and a read-only view for `ADMIN`; the sidebar shows the live
+global kill-switch state and reason. 19 unit tests, lint, typecheck, and the
+production build pass. Live smoke matrix: login, save, partial save, kill-switch
+flip with reason enforcement, five invalid-input rejections, admin/unauthenticated/cross-origin
+denials leaving data unchanged, audit history, and dashboard banner state.
+Phase remains open until the remaining Section 7 sections and checks are added.
 
 ---
 
@@ -589,8 +611,8 @@ what SMTP can prove.
 |---|---|---|---|
 | 0. Decisions and limits | IN PROGRESS | — | VPS with Docker Compose selected |
 | 1. Foundation | DONE | 2026-09-23 | Prisma/Docker, responsive UI shell, preview routes, and live database health verified |
-| 2. Authentication and users | NOT STARTED | — | — |
-| 3. Settings | NOT STARTED | — | — |
+| 2. Authentication and users | IN PROGRESS | 2026-09-23 | Login, sessions, user management, and audit verified; email OTP recovery deferred to Phase 3 SMTP source |
+| 3. Settings | IN PROGRESS | 2026-09-24 | Backend slice: encrypted settings row, validation, kill switch, and SMTP/IMAP probes verified end-to-end |
 | 4. Contacts | NOT STARTED | — | — |
 | 5. Templates | NOT STARTED | — | — |
 | 6. Scheduling and SMTP | NOT STARTED | — | — |
@@ -628,3 +650,5 @@ Append one short row whenever phase status changes.
 | 2026-09-23 | 1 | Foundation started | Prisma 7.10, PostgreSQL 18 migration/seed, Docker build, and host port 6543 verified |
 | 2026-09-23 | 1 | UI prototype built | Responsive dashboard, feature routes, full settings form, loading/error/empty states, and dark mode verified |
 | 2026-09-23 | 1 | Completed | Live database health passed in a disposable Docker stack; worker correctly deferred to sending phase |
+| 2026-09-24 | 3 | Backend slice started | `app_settings` migration, AES-256-GCM secret store, registry validation, save/test routes, kill-switch state in shell |
+| 2026-09-24 | 3 | Probes verified live | Fake SMTP/IMAP servers confirmed accept, reject, refused, and stored-secret paths; auth matrix and audit verified on disposable stack |

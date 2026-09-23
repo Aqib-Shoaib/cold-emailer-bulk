@@ -11,6 +11,7 @@ import {
   MagnifyingGlass,
   PaperPlaneTilt,
   PauseCircle,
+  PlayCircle,
   Tray,
   UsersThree,
   X,
@@ -30,7 +31,15 @@ const navigation = [
   { href: "/settings", label: "Settings", icon: GearSix },
 ];
 
-export function AppShell({ children, user }: { children: ReactNode; user: { name: string; role: "SUPER_ADMIN" | "ADMIN" } }) {
+export function AppShell({
+  children,
+  user,
+  sending,
+}: {
+  children: ReactNode;
+  user: { name: string; role: "SUPER_ADMIN" | "ADMIN" };
+  sending: { paused: boolean; reason: string };
+}) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -47,14 +56,15 @@ export function AppShell({ children, user }: { children: ReactNode; user: { name
             />
           ))}
         </nav>
-        <div className="mt-auto rounded-2xl border border-white/10 bg-white/[0.045] p-4">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <PauseCircle aria-hidden size={18} weight="fill" />
-            Sending paused
+        <div className={`mt-auto rounded-2xl border p-4 ${sending.paused ? "border-[var(--warning)]/40 bg-[var(--warning-soft)]" : "border-white/10 bg-white/[0.045]"}`}>
+          <div className={`flex items-center gap-2 text-sm font-medium ${sending.paused ? "text-[var(--warning)]" : ""}`}>
+            {sending.paused ? <PauseCircle aria-hidden size={18} weight="fill" /> : <PlayCircle aria-hidden size={18} weight="fill" />}
+            {sending.paused ? "Sending paused" : "Sending allowed"}
           </div>
-          <p className="mt-2 text-xs leading-5 text-[var(--sidebar-muted)]">
-            Preview mode is active. No emails can leave this workspace.
+          <p className={`mt-2 text-xs leading-5 ${sending.paused ? "text-[var(--foreground)]" : "text-[var(--sidebar-muted)]"}`}>
+            {sending.paused ? `The global kill switch is on: ${sending.reason}` : "Campaigns may send within the configured safety limits."}
           </p>
+          <Link href="/settings" className="mt-2 inline-block text-xs font-semibold text-[var(--warning)] hover:underline">Review safety settings</Link>
         </div>
         <div className="mt-4 flex items-center gap-3 px-2 py-2">
           <span className="grid size-9 place-items-center rounded-xl bg-[var(--accent)] text-sm font-semibold text-white">

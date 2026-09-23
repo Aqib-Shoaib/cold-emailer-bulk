@@ -2,7 +2,6 @@ import {
   ArrowRight,
   Books,
   CalendarBlank,
-  Check,
   DownloadSimple,
   Envelope,
   Export,
@@ -26,40 +25,232 @@ import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { getSessionUser, SESSION_COOKIE } from "@/lib/auth";
 import { getPrisma } from "@/lib/prisma";
+import { SETTINGS_ROW_ID, toPublicSettings } from "@/lib/settings";
+import { SETTING_SECTIONS } from "@/lib/settings-schema";
+import { SettingsForm, type SettingsFeedback } from "./settings-form";
 
-const validViews = new Set([
-  "dashboard",
-  "contacts",
-  "campaigns",
-  "templates",
-  "inbox",
-  "knowledge",
-  "users",
-  "settings",
-]);
+const validViews = new Set(["dashboard", "contacts", "campaigns", "templates", "inbox", "knowledge", "users", "settings"]);
 
 export default async function WorkspacePage({
   params,
   searchParams,
 }: {
   params: Promise<{ view?: string[] }>;
-  searchParams: Promise<{ notice?: string; error?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const segments = (await params).view;
   const view = segments?.[0] ?? "dashboard";
-
   if (segments && (segments.length !== 1 || !validViews.has(view))) notFound();
 
-  return {
-    dashboard: <DashboardView />,
-    contacts: <ContactsView />,
-    campaigns: <CampaignsView />,
-    templates: <TemplatesView />,
-    inbox: <InboxView />,
-    knowledge: <KnowledgeView />,
-    users: <UsersView feedback={await searchParams} />,
-    settings: <SettingsView />,
-  }[view];
+  const query = await searchParams;
+  const single = (key: string) => {
+    const value = query[key];
+    return typeof value === "string" ? value : undefined;
+  };
+
+  switch (view) {
+    case "settings":
+      return <SettingsView search={{ notice: single("notice"), error: single("error"), detail: single("detail"), fields: single("fields") }} />;
+    case "users":
+      return <UsersView feedback={{ notice: single("notice"), error: single("error") }} />;
+    default:
+      return <PreviewViews view={view} />;
+  }
+}
+
+/* ------------------------------ settings ------------------------------ */
+
+function parseSettingsFeedback({
+  notice,
+  error,
+  detail,
+  fields,
+}: {
+  notice?: string;
+  error?: string;
+  detail?: string;
+  fields?: string;
+}): SettingsFeedback {
+  if (notice === "saved") return { kind: "saved", fields: [], detail: "" };
+  if (error === "forbidden") return { kind: "forbidden", fields: [], detail: "" };
+  if (error === "encryption") return { kind: "encryption", fields: [], detail: "" };
+  if (error === "secret") return { kind: "secret", fields: [], detail: "" };
+  if (error === "validation") {
+    return { kind: "validation", fields: (fields ?? "").split(",").filter(Boolean), detail: "" };
+  }
+  if (error === "test") return { kind: "test", fields: [], detail: detail ?? "" };
+  if (error === "smtp-failed" || error === "imap-failed") {
+    return { kind: error, fields: [], detail: detail ?? "" };
+  }
+  if (notice === "smtp-ok") return { kind: "smtp-ok", fields: [], detail: "" };
+  if (notice === "imap-ok") return { kind: "imap-ok", fields: [], detail: "" };
+  return { kind: "none", fields: [], detail: "" };
+}
+
+async function SettingsView({ search }: { search: { notice?: string; error?: string; detail?: string; fields?: string } }) {
+  const cookieStore = await cookies();
+  const currentUser = await getSessionUser(cookieStore.get(SESSION_COOKIE)?.value);
+  if (!currentUser) return null;
+
+  const prisma = getPrisma();
+  const row = await prisma.appSettings.findUnique({ where: { id: SETTINGS_ROW_ID } });
+  const encryptionKey = process.env.SETTINGS_ENCRYPTION_KEY ?? "";
+  const settings = toPublicSettings(
+    row ?? { values: {}, sendingPaused: true, sendingPausedReason: "Initial setup", updatedAt: new Date() },
+    {
+      smtp_password_enc: row?.smtpPasswordEnc ?? null,
+      imap_password_enc: row?.imapPasswordEnc ?? null,
+      ai_api_key_enc: row?.aiApiKeyEnc ?? null,
+    },
+    encryptionKey,
+  );
+
+  const feedback = parseSettingsFeedback(search);
+  const feedbackMessages: Partial<Record<SettingsFeedback["kind"], string>> = {
+    saved: "Settings saved.",
+    forbidden: "Only the super admin can change settings.",
+    encryption: "The server encryption key is missing; settings changes are disabled.",
+    secret: "No password is configured yet for that connection. Save one first, then test.",
+    test: "Enter the host and port before testing the connection.",
+    "smtp-failed": feedback.detail || "The SMTP connection failed.",
+    "imap-failed": feedback.detail || "The IMAP connection failed.",
+    "smtp-ok": "The SMTP connection and sign-in succeeded.",
+    "imap-ok": "The IMAP connection and sign-in succeeded.",
+  };
+  const validationMessage =
+    feedback.kind === "validation"
+      ? `Some values could not be saved. Check the highlighted sections (${feedback.fields.join(", ")}).`
+      : null;
+
+  return (
+    <Page>
+      <PageHeader
+        title="Settings"
+        description="Configure identity, delivery, safety, tracking, and alerts. Values are validated and secrets are stored encrypted."
+      />
+      {feedback.kind !== "none" ? (
+        <p role={feedback.kind === "saved" || feedback.kind.endsWith("ok") ? "status" : "alert"} className={`rounded-xl px-4 py-3 text-sm ${feedback.kind === "saved" || feedback.kind.endsWith("ok") ? "bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "bg-[var(--danger-soft)] text-[var(--danger)]"}`}>
+          {validationMessage ?? feedbackMessages[feedback.kind]}
+        </p>
+      ) : null}
+      {currentUser.role === "SUPER_ADMIN" ? (
+        <SettingsForm sections={SETTING_SECTIONS} settings={settings} feedback={feedback} canManage />
+      ) : (
+        <p className="rounded-xl bg-[var(--warning-soft)] px-4 py-3 text-sm text-[var(--warning)]">
+          Only the super admin can edit settings. Values below are read-only.
+        </p>
+      )}
+      {currentUser.role !== "SUPER_ADMIN" ? <ReadonlySettings sections={SETTING_SECTIONS} settings={settings} /> : null}
+    </Page>
+  );
+}
+
+function ReadonlySettings({ sections, settings }: { sections: typeof SETTING_SECTIONS; settings: Awaited<ReturnType<typeof toPublicSettings>> }) {
+  return (
+    <div className="space-y-4">
+      {sections.map((section) => (
+        <details key={section.id} className="group rounded-2xl border bg-[var(--surface)] shadow-[0_12px_34px_rgba(31,54,42,0.045)]">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-5 sm:px-6">
+            <div>
+              <h2 className="font-semibold tracking-tight">{section.title}</h2>
+            </div>
+            <span className="text-sm font-medium text-[var(--accent-strong)] group-open:hidden">Open</span>
+            <span className="hidden text-sm font-medium text-[var(--accent-strong)] group-open:inline">Close</span>
+          </summary>
+          <div className="grid gap-5 border-t p-5 sm:grid-cols-2 sm:p-6 xl:grid-cols-3">
+            {section.fields.map((field) => (
+              <div key={field.key}>
+                <p className="text-sm font-medium">{field.label}</p>
+                <p className="mt-1 text-xs leading-5 text-[var(--muted)]">{field.hint}</p>
+                <p className="mt-2 truncate text-sm">
+                  {field.secretField
+                    ? settings.secrets[field.secretField]
+                      ? "Configured"
+                      : "Not configured"
+                    : settings.values[field.key] || "—"}
+                </p>
+            </div>
+            ))}
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+/* ------------------------------ users ------------------------------ */
+
+async function UsersView({ feedback }: { feedback: { notice?: string; error?: string } }) {
+  const cookieStore = await cookies();
+  const currentUser = await getSessionUser(cookieStore.get(SESSION_COOKIE)?.value);
+  if (!currentUser) return null;
+
+  const users = await getPrisma().user.findMany({ orderBy: { createdAt: "asc" } });
+  const activeCount = users.filter((user) => user.active).length;
+  const message = feedbackMessage(feedback);
+
+  return (
+    <Page>
+      <PageHeader title="Users" description="Admins share product access. Only the super admin can deactivate or delete users." />
+      {message ? <p role={feedback.error ? "alert" : "status"} className={`rounded-xl px-4 py-3 text-sm ${feedback.error ? "bg-[var(--danger-soft)] text-[var(--danger)]" : "bg-[var(--accent-soft)] text-[var(--accent-strong)]"}`}>{message}</p> : null}
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
+        <Panel className="p-0"><div className="p-5 sm:p-6"><SectionTitle title="Workspace users" description={`${activeCount} active ${activeCount === 1 ? "user can" : "users can"} access this workspace.`} /></div><div className="border-t">{users.map((user) => <UserRow key={user.id} id={user.id} name={user.name} email={user.email} role={user.role} active={user.active} canManage={currentUser.role === "SUPER_ADMIN" && user.role === "ADMIN"} />)}</div></Panel>
+        <div className="space-y-5">
+          {currentUser.role === "SUPER_ADMIN" ? <Panel><SectionTitle title="Add an admin" description="Set an initial password and share it with the user yourself." /><form action="/api/users/create" method="post" className="mt-5 space-y-4"><Field label="Full name" hint="Shown in activity and account menus"><input className="input" name="name" minLength={2} maxLength={120} autoComplete="name" placeholder="Enter full name" required /></Field><Field label="Email address" hint="Used to sign in"><input className="input" name="email" type="email" maxLength={320} autoComplete="email" placeholder="name@company.com" required /></Field><Field label="Initial password" hint="Use 12 to 200 characters"><input className="input" name="password" type="password" minLength={12} maxLength={200} autoComplete="new-password" placeholder="Enter a secure password" required /></Field><button type="submit" className={`${buttonClass(true)} w-full justify-center`}><UserPlus size={17} />Create admin</button></form></Panel> : null}
+          <Panel><SectionTitle title="Your security" description="Change your password or sign out other browser sessions." /><form action="/api/account/change-password" method="post" className="mt-5 space-y-4"><Field label="Current password" hint="Confirms this sensitive change"><input className="input" name="currentPassword" type="password" autoComplete="current-password" required /></Field><Field label="New password" hint="Use 12 to 200 characters"><input className="input" name="newPassword" type="password" minLength={12} maxLength={200} autoComplete="new-password" required /></Field><Field label="Confirm new password" hint="Enter the same new password again"><input className="input" name="confirmation" type="password" minLength={12} maxLength={200} autoComplete="new-password" required /></Field><button type="submit" className={`${buttonClass(true)} w-full justify-center`}>Change password</button></form><details className="mt-5 border-t pt-4"><summary className="cursor-pointer text-sm font-semibold">Sign out other sessions</summary><p className="mt-2 text-xs leading-5 text-[var(--muted)]">This immediately signs your account out everywhere except this browser.</p><form action="/api/account/revoke-sessions" method="post"><button type="submit" className={`${buttonClass(false)} mt-3`}>Confirm sign out</button></form></details></Panel>
+        </div>
+      </div>
+    </Page>
+  );
+}
+
+function feedbackMessage({ notice, error }: { notice?: string; error?: string }) {
+  if (error === "forbidden") return "Only the super admin can manage users.";
+  if (error === "security") return "The security change could not be completed. Check the passwords and try again.";
+  if (error === "invalid") return "The user change could not be completed. Check the details and try again.";
+  if (notice === "created") return "Admin created successfully.";
+  if (notice === "updated") return "Admin access updated.";
+  if (notice === "deleted") return "Admin deleted permanently.";
+  if (notice === "security-updated") return "Security settings updated.";
+  return null;
+}
+
+function UserRow({ id, name, email, role, active, canManage }: { id: string; name: string; email: string; role: "SUPER_ADMIN" | "ADMIN"; active: boolean; canManage: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0 sm:px-6">
+      <Avatar name={name} />
+      <div className="min-w-0 flex-1"><p className="text-sm font-medium">{name}</p><p className="mt-1 truncate text-xs text-[var(--muted)]">{email}</p></div>
+      <Status value={role === "SUPER_ADMIN" ? "Super admin" : "Admin"} />
+      <span className={`text-xs ${active ? "text-[var(--accent-strong)]" : "text-[var(--danger)]"}`}>{active ? "Active" : "Inactive"}</span>
+      {canManage ? (
+        active ? (
+          <details className="w-full rounded-xl bg-[var(--surface-soft)] p-3 sm:w-auto">
+            <summary className="cursor-pointer text-xs font-semibold">Manage</summary>
+            <p className="mt-2 text-xs text-[var(--muted)]">Deactivation signs this user out immediately. Deletion is permanent.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <form action="/api/users/deactivate" method="post"><input type="hidden" name="userId" value={id} /><button type="submit" className={buttonClass(false)}>Deactivate</button></form>
+              <form action="/api/users/delete" method="post"><input type="hidden" name="userId" value={id} /><button type="submit" className="inline-flex min-h-10 items-center rounded-xl border border-[var(--danger)] px-3.5 py-2 text-sm font-semibold text-[var(--danger)]">Delete permanently</button></form>
+            </div>
+          </details>
+        ) : (
+          <form action="/api/users/activate" method="post"><input type="hidden" name="userId" value={id} /><button type="submit" className={buttonClass(false)}>Reactivate</button></form>
+        )
+      ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------ preview views ------------------------------ */
+
+function PreviewViews({ view }: { view: string }) {
+  switch (view) {
+    case "contacts": return <ContactsView />;
+    case "campaigns": return <CampaignsView />;
+    case "templates": return <TemplatesView />;
+    case "inbox": return <InboxView />;
+    case "knowledge": return <KnowledgeView />;
+    default: return <DashboardView />;
+  }
 }
 
 function DashboardView() {
@@ -293,112 +484,7 @@ function KnowledgeView() {
   );
 }
 
-async function UsersView({ feedback }: { feedback: { notice?: string; error?: string } }) {
-  const cookieStore = await cookies();
-  const currentUser = await getSessionUser(cookieStore.get(SESSION_COOKIE)?.value);
-  if (!currentUser) return null;
-
-  const users = await getPrisma().user.findMany({ orderBy: { createdAt: "asc" } });
-  const activeCount = users.filter((user) => user.active).length;
-  const message = feedbackMessage(feedback);
-
-  return (
-    <Page>
-      <PageHeader title="Users" description="Admins share product access. Only the super admin can deactivate or delete users." />
-      {message ? <p role={feedback.error ? "alert" : "status"} className={`rounded-xl px-4 py-3 text-sm ${feedback.error ? "bg-[var(--danger-soft)] text-[var(--danger)]" : "bg-[var(--accent-soft)] text-[var(--accent-strong)]"}`}>{message}</p> : null}
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
-        <Panel className="p-0"><div className="p-5 sm:p-6"><SectionTitle title="Workspace users" description={`${activeCount} active ${activeCount === 1 ? "user can" : "users can"} access this workspace.`} /></div><div className="border-t">{users.map((user) => <UserRow key={user.id} id={user.id} name={user.name} email={user.email} role={user.role} active={user.active} canManage={currentUser.role === "SUPER_ADMIN" && user.role === "ADMIN"} />)}</div></Panel>
-        <div className="space-y-5">
-          {currentUser.role === "SUPER_ADMIN" ? <Panel><SectionTitle title="Add an admin" description="Set an initial password and share it with the user yourself." /><form action="/api/users/create" method="post" className="mt-5 space-y-4"><Field label="Full name" hint="Shown in activity and account menus"><input className="input" name="name" minLength={2} maxLength={120} autoComplete="name" placeholder="Enter full name" required /></Field><Field label="Email address" hint="Used to sign in"><input className="input" name="email" type="email" maxLength={320} autoComplete="email" placeholder="name@company.com" required /></Field><Field label="Initial password" hint="Use 12 to 200 characters"><input className="input" name="password" type="password" minLength={12} maxLength={200} autoComplete="new-password" placeholder="Enter a secure password" required /></Field><button type="submit" className={`${buttonClass(true)} w-full justify-center`}><UserPlus size={17} />Create admin</button></form></Panel> : null}
-          <Panel><SectionTitle title="Your security" description="Change your password or sign out other browser sessions." /><form action="/api/account/change-password" method="post" className="mt-5 space-y-4"><Field label="Current password" hint="Confirms this sensitive change"><input className="input" name="currentPassword" type="password" autoComplete="current-password" required /></Field><Field label="New password" hint="Use 12 to 200 characters"><input className="input" name="newPassword" type="password" minLength={12} maxLength={200} autoComplete="new-password" required /></Field><Field label="Confirm new password" hint="Enter the same new password again"><input className="input" name="confirmation" type="password" minLength={12} maxLength={200} autoComplete="new-password" required /></Field><button type="submit" className={`${buttonClass(true)} w-full justify-center`}>Change password</button></form><details className="mt-5 border-t pt-4"><summary className="cursor-pointer text-sm font-semibold">Sign out other sessions</summary><p className="mt-2 text-xs leading-5 text-[var(--muted)]">This immediately signs your account out everywhere except this browser.</p><form action="/api/account/revoke-sessions" method="post"><button type="submit" className={`${buttonClass(false)} mt-3`}>Confirm sign out</button></form></details></Panel>
-        </div>
-      </div>
-    </Page>
-  );
-}
-
-const settingsGroups = [
-  {
-    title: "Identity and application",
-    description: "Set the sender identity, regional defaults, and public links.",
-    fields: [
-      ["Company name", "Used in sender details and footers", "text", "Cold Emailer"],
-      ["Sender display name", "Default name recipients see", "text", "Outreach Team"],
-      ["Default reply-to", "Where direct replies should be sent", "email", "replies@company.com"],
-      ["Physical mailing address", "Required in compliant campaign footers", "text", ""],
-      ["Default unsubscribe footer", "Added to every bulk email", "text", "You can unsubscribe at any time."],
-      ["Application timezone", "Controls schedules and quiet hours", "select", "Asia/Karachi"],
-      ["Date and time format", "Display preference for the workspace", "select", "DD MMM YYYY, 12-hour"],
-      ["Locale", "Language used by the interface", "select", "English"],
-      ["Appearance", "Follow system or choose a fixed theme", "select", "System"],
-      ["Public base URL", "Used for unsubscribe and tracking links", "url", ""],
-    ],
-  },
-  {
-    title: "SMTP sending",
-    description: "Connect the mailbox that sends approved campaigns.",
-    fields: [
-      ["SMTP host", "Hostname supplied by your email provider", "text", ""], ["SMTP port", "Usually 465 or 587", "number", "587"], ["TLS mode", "Encryption required by the provider", "select", "STARTTLS"], ["SMTP username", "Mailbox or provider username", "text", ""], ["SMTP password", "Encrypted after saving and never shown again", "password", ""], ["From address", "Default sending address", "email", ""], ["Reply-to address", "Optional override for campaign replies", "email", ""], ["HELO name", "Only change if your provider requires it", "text", ""], ["Connection timeout", "Stop slow connection attempts", "number", "20 seconds"], ["Messages per minute", "Provider-safe short-term limit", "number", "10"], ["Messages per hour", "Provider-safe hourly limit", "number", "120"], ["Messages per day", "Hard daily safety limit", "number", "500"], ["Batch size", "Messages claimed together by the worker", "number", "10"], ["Delay jitter", "Adds natural variation between sends", "number", "15 seconds"], ["Retry count", "Attempts after a temporary failure", "number", "3"], ["Retry backoff", "Delay grows after each failure", "select", "Exponential"], ["Quiet days", "Days when sending remains paused", "text", "Saturday, Sunday"], ["Quiet hours", "No sending outside this window", "text", "09:00 to 17:00"], ["Sending timezone", "Timezone applied to campaign delivery", "select", "Asia/Karachi"],
-    ],
-  },
-  {
-    title: "IMAP receiving",
-    description: "Sync replies, bounces, and automated responses.",
-    fields: [
-      ["IMAP host", "Hostname supplied by your email provider", "text", ""], ["IMAP port", "Usually 993 for secure IMAP", "number", "993"], ["TLS mode", "Secure connection mode", "select", "TLS"], ["IMAP username", "Mailbox or provider username", "text", ""], ["IMAP password", "Encrypted after saving and never shown again", "password", ""], ["Mailbox folder", "Folder checked for new messages", "text", "INBOX"], ["Poll interval", "How often the worker checks for mail", "select", "Every 2 minutes"], ["Look-back window", "Recovery range if the sync cursor is lost", "select", "14 days"], ["Processed mail", "What happens after a message is stored", "select", "Leave in place"], ["Archive folder", "Optional destination for processed mail", "text", ""],
-    ],
-  },
-  {
-    title: "Safety and campaign defaults",
-    description: "Set hard limits that every campaign must obey.",
-    fields: [
-      ["Global sending", "Immediate kill switch for every campaign", "select", "Paused"], ["Kill-switch reason", "Explain why sending is disabled", "text", "UI preview mode"], ["New campaigns", "Default state after campaign creation", "select", "Paused"], ["Maximum audience", "Largest allowed campaign audience", "number", "1,000"], ["Start delay", "Minimum time between approval and first send", "select", "15 minutes"], ["Default daily cap", "Campaign limit before mailbox limit", "number", "250"], ["Concurrent campaigns", "Maximum campaigns sending together", "number", "2"], ["Duplicate-send window", "Prevent repeated outreach to one address", "select", "30 days"], ["Bounce threshold", "Pause a campaign above this rate", "number", "5%"], ["Stop on reply", "Cancel remaining follow-ups after a reply", "select", "Enabled"], ["Stop on unsubscribe", "Cancel all future contact immediately", "select", "Enabled"], ["Review before send", "Human approval is required", "select", "Required"], ["Test recipient", "Default address for campaign tests", "email", ""],
-    ],
-  },
-  {
-    title: "AI drafting",
-    description: "Choose the provider and guardrails used for assisted drafts.",
-    fields: [
-      ["AI provider", "Select before enabling draft generation", "select", "Not configured"], ["API endpoint", "Optional provider-compatible endpoint", "url", ""], ["API key", "Encrypted after saving and never shown again", "password", ""], ["Model", "Model used for drafting and grounding", "text", ""], ["Creativity", "Lower values produce more consistent copy", "number", "0.4"], ["Maximum output", "Maximum generated length", "number", "600 tokens"], ["Request timeout", "Stop requests that take too long", "number", "45 seconds"], ["Retry limit", "Retries after temporary provider failure", "number", "2"], ["Default tone", "Writing style for new drafts", "select", "Clear and professional"], ["Default language", "Language for generated copy", "select", "English"], ["Default signature", "Inserted into approved drafts", "text", ""], ["Forbidden claims", "Comma-separated claims AI must not make", "text", ""], ["Forbidden phrases", "Words or phrases that require review", "text", ""], ["Knowledge result limit", "Maximum source chunks per draft", "number", "6"], ["Context budget", "Maximum knowledge sent to the provider", "number", "8,000 tokens"], ["Human approval", "Block AI content from automatic queueing", "select", "Required"],
-    ],
-  },
-  {
-    title: "Tracking and privacy",
-    description: "Control optional tracking and data retention.",
-    fields: [
-      ["Open tracking", "Opens can be inaccurate due to privacy tools", "select", "Disabled"], ["Click tracking", "Route links through signed redirects", "select", "Disabled"], ["Raw event retention", "Remove detailed events after this period", "select", "180 days"], ["Message body retention", "Remove inbound content after this period", "select", "365 days"], ["Contact deletion", "Choose deletion or anonymized history", "select", "Anonymize history"], ["Privacy notice", "Shown where tracking consent requires it", "text", ""],
-    ],
-  },
-  {
-    title: "Notifications and maintenance",
-    description: "Choose operational alerts and cleanup periods.",
-    fields: [
-      ["Notification email", "Receives system and campaign alerts", "email", ""], ["Connection failures", "Alert when SMTP or IMAP stops working", "select", "Enabled"], ["Repeated send failures", "Alert after retry exhaustion", "select", "Enabled"], ["High bounce rate", "Alert before automatic campaign pause", "select", "Enabled"], ["Campaign completion", "Send a campaign summary", "select", "Enabled"], ["Worker inactivity", "Alert when scheduled work stops", "select", "Enabled"], ["Alert cooldown", "Avoid repeated alerts for one incident", "select", "30 minutes"], ["Job retention", "Keep completed background jobs", "select", "30 days"], ["Audit retention", "Keep security and settings history", "select", "365 days"], ["Log verbosity", "Production logging detail", "select", "Standard"],
-    ],
-  },
-] as const;
-
-function SettingsView() {
-  return (
-    <Page>
-      <PageHeader title="Settings" description="Configure delivery, safety, AI, privacy, and system behavior." action={<PrimaryButton><Check size={17} />Save changes</PrimaryButton>} />
-      <SafetyBanner />
-      <div className="space-y-4">
-        {settingsGroups.map((group, index) => (
-          <details key={group.title} open={index < 2} className="group rounded-2xl border bg-[var(--surface)] shadow-[0_12px_34px_rgba(31,54,42,0.045)]">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-5 sm:px-6"><div><h2 className="font-semibold tracking-tight">{group.title}</h2><p className="mt-1 text-sm text-[var(--muted)]">{group.description}</p></div><span className="text-sm font-medium text-[var(--accent-strong)] group-open:hidden">Open</span><span className="hidden text-sm font-medium text-[var(--accent-strong)] group-open:inline">Close</span></summary>
-            <div className="grid gap-5 border-t p-5 sm:grid-cols-2 sm:p-6 xl:grid-cols-3">
-              {group.fields.map(([label, hint, type, value]) => (
-                <SettingField key={label} label={label} hint={hint} type={type} value={value} />
-              ))}
-              {(group.title === "SMTP sending" || group.title === "IMAP receiving") && <div className="flex items-end"><SecondaryButton className="w-full justify-center">Test connection</SecondaryButton></div>}
-            </div>
-          </details>
-        ))}
-      </div>
-    </Page>
-  );
-}
+/* ------------------------------ shared pieces ------------------------------ */
 
 function Page({ children }: { children: ReactNode }) { return <div className="space-y-5 sm:space-y-6">{children}</div>; }
 function PageHeader({ title, description, action }: { title: string; description: string; action?: ReactNode }) { return <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><h1 className="text-2xl font-semibold tracking-[-0.03em] sm:text-3xl">{title}</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)] sm:text-base">{description}</p></div>{action}</div>; }
@@ -411,7 +497,7 @@ function PrimaryLink({ href, children }: { href: string; children: ReactNode }) 
 function TextLink({ href, children }: { href: string; children: ReactNode }) { return <Link href={href} className="inline-flex items-center gap-1 text-sm font-semibold text-[var(--accent-strong)] hover:underline">{children}<ArrowRight size={15} /></Link>; }
 function MiniStat({ label, value, note }: { label: string; value: string; note: string }) { return <Panel><p className="text-sm text-[var(--muted)]">{label}</p><p className="mt-2 font-mono text-2xl font-semibold">{value}</p><p className="mt-1 text-xs text-[var(--accent-strong)]">{note}</p></Panel>; }
 function Th({ children }: { children: ReactNode }) { return <th className="px-5 py-3 font-medium sm:px-6">{children}</th>; }
-function Td({ children, className = "" }: { children: ReactNode; className?: string }) { return <td className={`px-5 py-4 sm:px-6 ${className}`}>{children}</td>; }
+function Td({ children, className = "", ...rest }: { children: ReactNode; className?: string } & React.TdHTMLAttributes<HTMLTableCellElement>) { return <td className={`px-5 py-4 sm:px-6 ${className}`} {...rest}>{children}</td>; }
 function CampaignRow({ name, status, audience, sent, replies }: { name: string; status: string; audience: string; sent: string; replies: string }) { return <tr className="border-b last:border-0"><Td><span className="font-medium">{name}</span></Td><Td><Status value={status} /></Td><Td>{audience}</Td><Td>{sent}</Td><Td>{replies}</Td></tr>; }
 function Status({ value }: { value: string }) { const warning = ["Review", "Paused", "Processing", "Follow-up"].includes(value); const danger = value === "Suppressed"; const neutral = ["New", "Completed", "Closing", "Introduction"].includes(value); return <span className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${danger ? "bg-[var(--danger-soft)] text-[var(--danger)]" : warning ? "bg-[var(--warning-soft)] text-[var(--warning)]" : neutral ? "bg-[var(--surface-soft)] text-[var(--muted)]" : "bg-[var(--accent-soft)] text-[var(--accent-strong)]"}`}>{value}</span>; }
 function ReplyRow({ initials, name, company, time }: { initials: string; name: string; company: string; time: string }) { return <Link href="/inbox" className="flex items-center gap-3 rounded-xl p-2.5 hover:bg-[var(--surface-soft)]"><span className="grid size-9 place-items-center rounded-xl bg-[var(--surface-soft)] text-xs font-semibold">{initials}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{name}</span><span className="block truncate text-xs text-[var(--muted)]">{company}</span></span><span className="text-xs text-[var(--subtle)]">{time}</span></Link>; }
@@ -419,13 +505,10 @@ function AttentionItem({ icon, title, body, href }: { icon: ReactNode; title: st
 function Avatar({ name }: { name: string }) { return <span className="grid size-9 place-items-center rounded-xl bg-[var(--accent-soft)] text-xs font-semibold text-[var(--accent-strong)]">{name.split(" ").map((part) => part[0]).join("")}</span>; }
 function emailFor(name: string) { return `${name.toLowerCase().replace(" ", ".")}@example.com`; }
 function CampaignFact({ icon, value }: { icon: ReactNode; value: string }) { return <div className="flex gap-2 text-[var(--muted)]"><span className="mt-0.5 shrink-0">{icon}</span><span className="text-xs leading-5">{value}</span></div>; }
-function SafetyBanner() { return <div className="flex flex-col gap-3 rounded-2xl border border-[var(--warning)]/25 bg-[var(--warning-soft)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><ShieldCheck size={20} className="mt-0.5 shrink-0 text-[var(--warning)]" /><div><p className="text-sm font-semibold">Global sending is paused</p><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Campaigns can be prepared and reviewed, but no email will be sent in preview mode.</p></div></div><Link href="/settings" className="text-sm font-semibold text-[var(--warning)] hover:underline">Review safety settings</Link></div>; }
+function SafetyBanner() { return <div className="flex flex-col gap-3 rounded-2xl border border-[var(--warning)]/25 bg-[var(--warning-soft)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><ShieldCheck size={20} className="mt-0.5 shrink-0 text-[var(--warning)]" /><div><p className="text-sm font-semibold">Global sending is paused</p><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Campaigns can be prepared and reviewed, but no email will be sent.</p></div></div><Link href="/settings" className="text-sm font-semibold text-[var(--warning)] hover:underline">Review safety settings</Link></div>; }
 function Conversation({ initials, name, subject, preview, time, active = false }: { initials: string; name: string; subject: string; preview: string; time: string; active?: boolean }) { return <button type="button" className={`flex w-full gap-3 border-b p-4 text-left last:border-0 ${active ? "bg-[var(--accent-soft)]" : "hover:bg-[var(--surface-soft)]"}`}><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-[var(--surface-raised)] text-xs font-semibold">{initials}</span><span className="min-w-0 flex-1"><span className="flex justify-between gap-2"><span className="truncate text-sm font-semibold">{name}</span><span className="text-xs text-[var(--subtle)]">{time}</span></span><span className="mt-1 block truncate text-xs font-medium">{subject}</span><span className="mt-1 block truncate text-xs text-[var(--muted)]">{preview}</span></span></button>; }
 function Message({ sender, time, incoming = false, children }: { sender: string; time: string; incoming?: boolean; children: ReactNode }) { return <article className={`max-w-2xl rounded-2xl border p-4 text-sm leading-6 ${incoming ? "bg-[var(--accent-soft)]" : "bg-[var(--surface-raised)]"}`}><div className="mb-3 flex items-center justify-between gap-3 border-b pb-3"><span className="font-semibold">{sender}</span><time className="text-xs text-[var(--muted)]">{time}</time></div>{children}</article>; }
 function SourceRow({ icon, name, detail, status }: { icon: ReactNode; name: string; detail: string; status: string }) { return <div className="flex items-center gap-3 border-b px-5 py-4 last:border-0 sm:px-6"><span className="grid size-10 place-items-center rounded-xl bg-[var(--surface-soft)] text-[var(--muted)]">{icon}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{name}</p><p className="mt-1 truncate text-xs text-[var(--muted)]">{detail}</p></div><Status value={status} /></div>; }
 function GroundedSource({ name, relevance }: { name: string; relevance: string }) { return <div className="rounded-xl bg-[var(--surface-raised)] p-3"><p className="text-sm font-medium">{name}</p><p className="mt-1 text-xs text-[var(--muted)]">{relevance}</p></div>; }
 function EmptyState({ icon, title, body, action }: { icon: ReactNode; title: string; body: string; action: string }) { return <Panel className="flex flex-col items-center py-10 text-center"><span className="grid size-12 place-items-center rounded-2xl bg-[var(--surface-soft)] text-[var(--muted)]">{icon}</span><h2 className="mt-4 font-semibold">{title}</h2><p className="mt-2 max-w-md text-sm leading-6 text-[var(--muted)]">{body}</p><SecondaryButton className="mt-5">{action}</SecondaryButton></Panel>; }
-function UserRow({ id, name, email, role, active, canManage }: { id: string; name: string; email: string; role: "SUPER_ADMIN" | "ADMIN"; active: boolean; canManage: boolean }) { return <div className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0 sm:px-6"><Avatar name={name} /><div className="min-w-0 flex-1"><p className="text-sm font-medium">{name}</p><p className="mt-1 truncate text-xs text-[var(--muted)]">{email}</p></div><Status value={role === "SUPER_ADMIN" ? "Super admin" : "Admin"} /><span className={`text-xs ${active ? "text-[var(--accent-strong)]" : "text-[var(--danger)]"}`}>{active ? "Active" : "Inactive"}</span>{canManage ? active ? <details className="w-full rounded-xl bg-[var(--surface-soft)] p-3 sm:w-auto"><summary className="cursor-pointer text-xs font-semibold">Manage</summary><p className="mt-2 text-xs text-[var(--muted)]">Deactivation signs this user out immediately. Deletion is permanent.</p><div className="mt-3 flex flex-wrap gap-2"><form action="/api/users/deactivate" method="post"><input type="hidden" name="userId" value={id} /><button type="submit" className={buttonClass(false)}>Deactivate</button></form><form action="/api/users/delete" method="post"><input type="hidden" name="userId" value={id} /><button type="submit" className="inline-flex min-h-10 items-center rounded-xl border border-[var(--danger)] px-3.5 py-2 text-sm font-semibold text-[var(--danger)]">Delete permanently</button></form></div></details> : <form action="/api/users/activate" method="post"><input type="hidden" name="userId" value={id} /><button type="submit" className={buttonClass(false)}>Reactivate</button></form> : null}</div>; }
-function feedbackMessage({ notice, error }: { notice?: string; error?: string }) { if (error === "forbidden") return "Only the super admin can manage users."; if (error === "security") return "The security change could not be completed. Check the passwords and try again."; if (error === "invalid") return "The user change could not be completed. Check the details and try again."; if (notice === "created") return "Admin created successfully."; if (notice === "updated") return "Admin access updated."; if (notice === "deleted") return "Admin deleted permanently."; if (notice === "security-updated") return "Security settings updated."; return null; }
 function Field({ label, hint, children }: { label: string; hint: string; children: ReactNode }) { return <label className="block"><span className="flex items-center gap-1.5 text-sm font-medium">{label}<Info size={14} className="text-[var(--subtle)]" aria-label={hint} /></span><span className="mt-1 block text-xs leading-5 text-[var(--muted)]">{hint}</span><span className="mt-2 block">{children}</span></label>; }
-function SettingField({ label, hint, type, value }: { label: string; hint: string; type: string; value: string }) { return <Field label={label} hint={hint}>{type === "select" ? <select className="input" defaultValue={value}><option>{value}</option><option>Configure later</option></select> : <input className="input" type={type === "password" ? "password" : type === "number" ? "text" : type} defaultValue={value} placeholder={type === "password" ? "Not configured" : "Enter a value"} />}</Field>; }

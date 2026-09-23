@@ -24,6 +24,7 @@ model User {
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   sessions     Session[]
   auditEvents  AuditEvent[]
+  settingsUpdates AppSettings[]
 
   @@map("users")
 }
@@ -49,6 +50,21 @@ model AuthThrottle {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@map("auth_throttles")
+}
+
+model AppSettings {
+  id                  String   @id @default("singleton") @db.VarChar(20)
+  sendingPaused       Boolean  @default(true) @map("sending_paused")
+  sendingPausedReason String   @default("Initial setup") @map("sending_paused_reason") @db.VarChar(300)
+  smtpPasswordEnc     String?  @map("smtp_password_enc") @db.Text
+  imapPasswordEnc     String?  @map("imap_password_enc") @db.Text
+  aiApiKeyEnc         String?  @map("ai_api_key_enc") @db.Text
+  values              Json     @default("{}")
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  updatedByUserId     String?  @map("updated_by_user_id") @db.Uuid
+  updatedBy           User?    @relation(fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@map("app_settings")
 }
 
 model AuditEvent {
