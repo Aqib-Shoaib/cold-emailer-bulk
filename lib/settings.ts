@@ -57,6 +57,28 @@ function validateField(field: (typeof SETTING_FIELDS)[number], raw: string): str
     return null;
   }
 
+  if (field.key === "locale") {
+    try {
+      new Intl.Locale(value);
+    } catch {
+      return "Enter a valid BCP 47 locale, such as en-PK";
+    }
+  }
+
+  if (field.key === "smtpQuietDays") {
+    const weekdays = new Set(["mon", "monday", "tue", "tuesday", "wed", "wednesday", "thu", "thursday", "fri", "friday", "sat", "saturday", "sun", "sunday"]);
+    if (value.split(",").some((day) => !weekdays.has(day.trim().toLowerCase()))) {
+      return "Use comma-separated weekdays, such as Friday, Saturday";
+    }
+  }
+
+  if (field.key === "smtpQuietHours") {
+    const match = /^(\d{2}):(\d{2})-(\d{2}):(\d{2})$/.exec(value);
+    if (!match || Number(match[1]) > 23 || Number(match[2]) > 59 || Number(match[3]) > 23 || Number(match[4]) > 59) {
+      return "Use HH:MM-HH:MM with valid 24-hour times";
+    }
+  }
+
   if (field.type === "email" && !EMAIL_PATTERN.test(value)) return "Enter a valid email address";
   if (field.type === "url") {
     try {
@@ -90,13 +112,24 @@ export interface PublicSettings {
  * Validates raw form input against the registry. Returns every error, so the
  * UI can report all problems in one pass.
  */
-export function validateSettingsInput(input: SettingsInput): SettingsError[] {
+export function validateSettingsInput(input: SettingsInput, options: { publicAppUrl?: string } = {}): SettingsError[] {
   const errors: SettingsError[] = [];
 
   for (const field of SETTING_FIELDS) {
     const raw = input[field.key] ?? "";
     const message = validateField(field, raw);
     if (message) errors.push({ field: field.key, message });
+  }
+
+  const publicBaseUrl = input.publicBaseUrl?.trim();
+  if (publicBaseUrl && options.publicAppUrl) {
+    try {
+      if (new URL(publicBaseUrl).origin !== new URL(options.publicAppUrl).origin) {
+        errors.push({ field: "publicBaseUrl", message: "Must use the deployed application origin" });
+      }
+    } catch {
+      // The field-level URL validator reports malformed values.
+    }
   }
 
   if (!errors.length) {
@@ -128,12 +161,12 @@ export function settingsDefaults(): SettingsValues {
  */
 export function computeSettingsUpdate(
   input: SettingsInput,
-  options: { encryptionKey: string },
+  options: { encryptionKey: string; removeSecrets?: ReadonlySet<SecretField> },
 ): {
   values: SettingsValues;
   sendingPaused: boolean;
   sendingPausedReason: string;
-  secrets: Partial<Record<SecretField, string>>;
+  secrets: Partial<Record<SecretField, string | null>>;
 } {
   const values = settingsDefaults();
 
@@ -154,10 +187,14 @@ export function computeSettingsUpdate(
 
   values[SENDING_PAUSED_REASON_FIELD] = sendingPausedReason;
 
-  const secrets: Partial<Record<SecretField, string>> = {};
+  const secrets: Partial<Record<SecretField, string | null>> = {};
   for (const field of SETTING_FIELDS) {
     const secretField = secretFieldFor(field.key);
     if (!secretField) continue;
+    if (options.removeSecrets?.has(secretField)) {
+      secrets[secretField] = null;
+      continue;
+    }
     const raw = (input[field.key] ?? "").trim();
     if (raw.length > 0) secrets[secretField] = encryptSecret(options.encryptionKey, raw);
   }

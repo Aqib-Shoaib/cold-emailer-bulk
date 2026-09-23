@@ -89,6 +89,25 @@ test("computeSettingsUpdate encrypts secrets and keeps blanks on the stored valu
   assert.ok(!JSON.stringify(update.values).includes("fresh-secret"), "secrets must never land in values");
 });
 
+test("computeSettingsUpdate removes only explicitly selected secrets", () => {
+  const update = computeSettingsUpdate(input({ smtpPassword: "replacement", imapPassword: "keep" }), {
+    encryptionKey: KEY,
+    removeSecrets: new Set(["smtp_password_enc"]),
+  });
+
+  assert.equal(update.secrets.smtp_password_enc, null);
+  assert.ok(update.secrets.imap_password_enc);
+});
+
+test("structured locale, quiet hours, quiet days, and deployed origin are validated", () => {
+  const errors = validateSettingsInput(
+    input({ locale: "not_a_locale", smtpQuietHours: "25:00-09:00", smtpQuietDays: "Friday, Funday", publicBaseUrl: "https://wrong.example" }),
+    { publicAppUrl: "https://app.example" },
+  );
+
+  assert.deepEqual(new Set(errors.map((error) => error.field)), new Set(["locale", "smtpQuietHours", "smtpQuietDays", "publicBaseUrl"]));
+});
+
 test("switching the kill switch off records the choice without a reason", () => {
   const update = computeSettingsUpdate(input({ sendingPaused: "Sending allowed" }), { encryptionKey: KEY });
   assert.equal(update.sendingPaused, false);

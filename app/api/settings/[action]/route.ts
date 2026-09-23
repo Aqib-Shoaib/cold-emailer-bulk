@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connect } from "node:net";
 import tls from "node:tls";
 import { getRequestSession, isSameOrigin, requestOrigin } from "@/lib/auth";
-import { decryptSecret } from "@/lib/crypto";
+import { decryptSecret, type SecretField } from "@/lib/crypto";
 import { getPrisma } from "@/lib/prisma";
 import {
   computeSettingsUpdate,
@@ -11,7 +11,7 @@ import {
   type SettingsInput,
 } from "@/lib/settings";
 import type { InputJsonValue } from "@prisma/client/runtime/client";
-import { SETTING_FIELDS, SETTING_SECTIONS } from "@/lib/settings-schema";
+import { SECRET_SETTING_FIELDS, SETTING_FIELDS, SETTING_SECTIONS } from "@/lib/settings-schema";
 
 function back(request: NextRequest, query: string) {
   return NextResponse.redirect(new URL(`/settings?${query}`, requestOrigin(request)), 303);
@@ -50,8 +50,6 @@ export async function POST(
 
   const session = await getRequestSession(request);
   if (!session) return NextResponse.redirect(new URL("/login", requestOrigin(request)), 303);
-  if (session.user.role !== "SUPER_ADMIN") return back(request, "error=forbidden");
-
   const action = (await params).action;
   if (action !== "save" && action !== "test-smtp" && action !== "test-imap") {
     return new NextResponse("Not found", { status: 404 });
@@ -75,20 +73,26 @@ export async function POST(
 
   if (action === "save") {
     const input = mergedInput(form, storedValues);
-    const errors = validateSettingsInput(input);
+    const submitted = new Set(form.keys());
+    const errors = validateSettingsInput(input, { publicAppUrl: process.env.APP_URL })
+      .filter((error) => submitted.has(error.field));
     if (errors.length > 0) {
       const fields = [...new Set(errors.map((error) => error.field))].join(",");
       return back(request, `error=validation&fields=${encodeURIComponent(fields)}`);
     }
 
-    const update = computeSettingsUpdate(input, { encryptionKey });
+    const removeSecrets = new Set<SecretField>();
+    for (const field of SECRET_SETTING_FIELDS) {
+      if (field.secretField && form.get(`${field.key}__remove`) === "on") removeSecrets.add(field.secretField);
+    }
+    const update = computeSettingsUpdate(input, { encryptionKey, removeSecrets });
     const data = {
       sendingPaused: update.sendingPaused,
       sendingPausedReason: update.sendingPausedReason,
       values: update.values as unknown as InputJsonValue,
-      ...(update.secrets.smtp_password_enc ? { smtpPasswordEnc: update.secrets.smtp_password_enc } : {}),
-      ...(update.secrets.imap_password_enc ? { imapPasswordEnc: update.secrets.imap_password_enc } : {}),
-      ...(update.secrets.ai_api_key_enc ? { aiApiKeyEnc: update.secrets.ai_api_key_enc } : {}),
+      ...(update.secrets.smtp_password_enc !== undefined ? { smtpPasswordEnc: update.secrets.smtp_password_enc } : {}),
+      ...(update.secrets.imap_password_enc !== undefined ? { imapPasswordEnc: update.secrets.imap_password_enc } : {}),
+      ...(update.secrets.ai_api_key_enc !== undefined ? { aiApiKeyEnc: update.secrets.ai_api_key_enc } : {}),
       updatedByUserId: session.user.id,
     };
 
@@ -119,7 +123,8 @@ export async function POST(
 
   const input = mergedInput(form, storedValues);
   const sectionKeys = new Set(section.fields.map((field) => field.key));
-  const sectionErrors = validateSettingsInput(input).filter((error) => sectionKeys.has(error.field));
+  const sectionErrors = validateSettingsInput(input, { publicAppUrl: process.env.APP_URL })
+    .filter((error) => sectionKeys.has(error.field));
   if (sectionErrors.length > 0) {
     const fields = [...new Set(sectionErrors.map((error) => error.field))].join(",");
     return back(request, `error=validation&fields=${encodeURIComponent(fields)}`);
@@ -143,12 +148,16 @@ export async function POST(
           port: Number(value("smtpPort") || "0"),
           tlsMode: value("smtpTlsMode"),
           username: value("smtpUsername"),
+          timeoutMs: Number(value("smtpConnectionTimeoutSeconds")) * 1000,
+          heloName: value("smtpHeloName") || value("smtpHost"),
         }
       : {
           host: value("imapHost"),
           port: Number(value("imapPort") || "0"),
           tlsMode: value("imapTlsMode"),
           username: value("imapUsername"),
+          timeoutMs: 10_000,
+          heloName: "",
         };
 
   if (!probe.host || !probe.port || Number.isNaN(probe.port)) {
@@ -191,6 +200,8 @@ interface ProbeTarget {
   port: number;
   tlsMode: string;
   username: string;
+  timeoutMs: number;
+  heloName: string;
 }
 
 function plainConnection(host: string, port: number, timeoutMs: number) {
@@ -208,7 +219,7 @@ function plainConnection(host: string, port: number, timeoutMs: number) {
 
 function secureConnection(host: string, port: number, timeoutMs: number) {
   return new Promise<tls.TLSSocket>((resolve, reject) => {
-    const socket = tls.connect({ host, port, servername: host, timeout: timeoutMs, rejectUnauthorized: false });
+    const socket = tls.connect({ host, port, servername: host, timeout: timeoutMs });
     const fail = (message: string) => {
       socket.destroy();
       reject(new Error(message));
@@ -328,36 +339,33 @@ async function smtpAuthLogin(
   );
 }
 
-const SMTP_TIMEOUT_MS = 10_000;
-const IMAP_TIMEOUT_MS = 10_000;
-
 async function probeRaw(target: ProbeTarget, password: string, tlsMode: string) {
-  const socket = await plainConnection(target.host, target.port, SMTP_TIMEOUT_MS);
+  const socket = await plainConnection(target.host, target.port, target.timeoutMs);
   let reader = new ProbeReader(socket);
   try {
-    const greeting = await readSmtpReply(reader, SMTP_TIMEOUT_MS);
+    const greeting = await readSmtpReply(reader, target.timeoutMs);
     if (greeting.code !== "220") {
       return { ok: false, message: `The server answered with an unexpected greeting (${greeting.code}).` };
     }
 
     let activeSocket: import("node:net").Socket | tls.TLSSocket = socket;
     if (tlsMode === "STARTTLS") {
-      const ehlo = await writeAndReadSmtp(reader, activeSocket, `EHLO ${target.host}`, SMTP_TIMEOUT_MS, (reply) =>
+      const ehlo = await writeAndReadSmtp(reader, activeSocket, `EHLO ${target.heloName}`, target.timeoutMs, (reply) =>
         reply.code === "250" ? { ok: true } : { ok: false, message: "The server refused the EHLO handshake." });
       if (!/STARTTLS/i.test(ehlo.text)) {
         return { ok: false, message: "The server does not advertise STARTTLS. Choose the SSL mode or a different port." };
       }
-      await writeAndReadSmtp(reader, activeSocket, "STARTTLS", SMTP_TIMEOUT_MS, (reply) =>
+      await writeAndReadSmtp(reader, activeSocket, "STARTTLS", target.timeoutMs, (reply) =>
         reply.code === "220" ? { ok: true } : { ok: false, message: "The server refused to start TLS." });
-      activeSocket = await upgradeSocket(socket, target.host, SMTP_TIMEOUT_MS);
+      activeSocket = await upgradeSocket(socket, target.host, target.timeoutMs);
       // After the upgrade, data flows through the TLSSocket, so the reader
       // must be re-created over the secure stream.
       reader = new ProbeReader(activeSocket);
     }
 
-    await writeAndReadSmtp(reader, activeSocket, `EHLO ${target.host}`, SMTP_TIMEOUT_MS, (reply) =>
+    await writeAndReadSmtp(reader, activeSocket, `EHLO ${target.heloName}`, target.timeoutMs, (reply) =>
       reply.code === "250" ? { ok: true } : { ok: false, message: "The server refused the EHLO handshake." });
-    await smtpAuthLogin(reader, activeSocket, target.username, password, SMTP_TIMEOUT_MS);
+    await smtpAuthLogin(reader, activeSocket, target.username, password, target.timeoutMs);
     socket.write("QUIT\r\n", () => undefined);
     return { ok: true, message: "" };
   } finally {
@@ -367,7 +375,7 @@ async function probeRaw(target: ProbeTarget, password: string, tlsMode: string) 
 
 function upgradeSocket(socket: import("node:net").Socket, host: string, timeoutMs: number) {
   return new Promise<tls.TLSSocket>((resolve, reject) => {
-    const secure = tls.connect({ socket, servername: host, rejectUnauthorized: false });
+    const secure = tls.connect({ socket, servername: host });
     const timer = setTimeout(() => {
       secure.destroy();
       reject(new Error("The TLS handshake timed out"));
@@ -389,16 +397,16 @@ async function probeSmtp(target: ProbeTarget, password: string) {
   }
   try {
     if (target.tlsMode === "SSL") {
-      const socket = await secureConnection(target.host, target.port, SMTP_TIMEOUT_MS);
+      const socket = await secureConnection(target.host, target.port, target.timeoutMs);
       const reader = new ProbeReader(socket);
       try {
-        const greeting = await readSmtpReply(reader, SMTP_TIMEOUT_MS);
+        const greeting = await readSmtpReply(reader, target.timeoutMs);
         if (greeting.code !== "220") {
           return { ok: false, message: `The server answered with an unexpected greeting (${greeting.code}).` };
         }
-        await writeAndReadSmtp(reader, socket, `EHLO ${target.host}`, SMTP_TIMEOUT_MS, (reply) =>
+        await writeAndReadSmtp(reader, socket, `EHLO ${target.heloName}`, target.timeoutMs, (reply) =>
           reply.code === "250" ? { ok: true } : { ok: false, message: "The server refused the EHLO handshake." });
-        await smtpAuthLogin(reader, socket, target.username, password, SMTP_TIMEOUT_MS);
+        await smtpAuthLogin(reader, socket, target.username, password, target.timeoutMs);
         socket.write("QUIT\r\n", () => undefined);
         return { ok: true, message: "" };
       } finally {
@@ -425,11 +433,11 @@ async function probeImap(target: ProbeTarget, password: string) {
 
 async function probeImapConnection(target: ProbeTarget, password: string, useTls: boolean) {
   const socket = useTls
-    ? await secureConnection(target.host, target.port, IMAP_TIMEOUT_MS)
-    : await plainConnection(target.host, target.port, IMAP_TIMEOUT_MS);
+    ? await secureConnection(target.host, target.port, target.timeoutMs)
+    : await plainConnection(target.host, target.port, target.timeoutMs);
   const reader = new ProbeReader(socket);
   try {
-    const greeting = await reader.readLine(IMAP_TIMEOUT_MS);
+    const greeting = await reader.readLine(target.timeoutMs);
     if (!/^\* (OK|PREAUTH)/.test(greeting)) {
       return { ok: false, message: `The server did not answer with an IMAP greeting (${greeting.slice(0, 120)}).` };
     }
@@ -438,7 +446,7 @@ async function probeImapConnection(target: ProbeTarget, password: string, useTls
     socket.write(`${command}\r\n`);
     let response = "";
     for (;;) {
-      response = await reader.readLine(IMAP_TIMEOUT_MS);
+      response = await reader.readLine(target.timeoutMs);
       if (response.startsWith(`${loginTag} `)) break;
     }
     if (!response.startsWith(`${loginTag} OK`)) {

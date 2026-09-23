@@ -66,5 +66,5 @@ export function decryptSecret(encryptionKey: string, stored: string) {
 }
 
 export function isSecretConfigured(encryptionKey: string | undefined, stored: string | null | undefined) {
-  return Boolean(encryptionKey && stored);
+  return Boolean(encryptionKey && stored && decryptSecret(encryptionKey, stored));
 }

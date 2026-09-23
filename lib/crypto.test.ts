@@ -28,7 +28,8 @@ test("wrong keys and corrupted records decrypt to null instead of crashing", () 
 });
 
 test("configured detection requires both key and stored value", () => {
-  assert.equal(isSecretConfigured(KEY, "v1:abc.def"), true);
+  assert.equal(isSecretConfigured(KEY, encryptSecret(KEY, "configured")), true);
+  assert.equal(isSecretConfigured(KEY, "v1:abc.def"), false);
   assert.equal(isSecretConfigured(KEY, null), false);
   assert.equal(isSecretConfigured(undefined, "v1:abc.def"), false);
   assert.equal(isSecretConfigured(undefined, undefined), false);

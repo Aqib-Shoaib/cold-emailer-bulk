@@ -20,15 +20,14 @@ export function SettingsForm({
   sections,
   settings,
   feedback,
-  canManage,
 }: {
   sections: readonly SettingSectionDef[];
   settings: PublicSettings;
   feedback: SettingsFeedback;
-  canManage: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   async function submit(form: HTMLFormElement, action: string) {
     setPending(action);
@@ -51,13 +50,30 @@ export function SettingsForm({
 
   const sectionHasError = (section: SettingSectionDef) =>
     feedback.fields.some((field) => section.fields.some((entry) => entry.key === field));
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleSections = normalizedQuery
+    ? sections.filter((section) =>
+        [section.title, section.description, ...section.fields.flatMap((field) => [field.label, field.hint])]
+          .some((value) => value.toLocaleLowerCase().includes(normalizedQuery)),
+      )
+    : sections;
 
   return (
     <div className="space-y-4">
-      {sections.map((section, index) => (
+      <label className="block">
+        <span className="sr-only">Search settings</span>
+        <input
+          className={inputClass}
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search settings by section or field"
+        />
+      </label>
+      {visibleSections.map((section, index) => (
         <details
           key={section.id}
-          open={index < 2 || sectionHasError(section)}
+          open={normalizedQuery.length > 0 || index < 2 || sectionHasError(section)}
           className="group rounded-2xl border bg-[var(--surface)] shadow-[0_12px_34px_rgba(31,54,42,0.045)]"
         >
           <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-5 sm:px-6">
@@ -92,7 +108,7 @@ export function SettingsForm({
               {section.id === "smtp" || section.id === "imap" ? (
                 <button
                   type="button"
-                  disabled={!canManage || pending !== null}
+                  disabled={pending !== null}
                   onClick={(event) => {
                     const form = event.currentTarget.form;
                     if (form) void submit(form, `test-${section.id}`);
@@ -104,7 +120,7 @@ export function SettingsForm({
               ) : null}
               <button
                 type="submit"
-                disabled={!canManage || pending !== null}
+                disabled={pending !== null}
                 className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-[var(--accent)] bg-[var(--accent)] px-3.5 py-2 text-sm font-semibold text-white hover:bg-[var(--accent-strong)] disabled:opacity-60"
               >
                 {pending === "save" ? "Saving…" : "Save changes"}
@@ -113,6 +129,11 @@ export function SettingsForm({
           </form>
         </details>
       ))}
+      {visibleSections.length === 0 ? (
+        <p role="status" className="rounded-2xl border bg-[var(--surface)] p-6 text-sm text-[var(--muted)]">
+          No settings match “{query}”.
+        </p>
+      ) : null}
       {pending ? <p className="sr-only" role="status">Working…</p> : null}
     </div>
   );
@@ -133,7 +154,7 @@ function SettingInput({
   if (field.secretField) {
     const configured = settings.secrets[field.secretField];
     return (
-      <label className="block">
+      <div className="block">
         <span className="flex items-center gap-1.5 text-sm font-medium">
           {field.label}
           <Info size={14} className="text-[var(--subtle)]" aria-label={field.hint} />
@@ -143,6 +164,7 @@ function SettingInput({
         </span>
         <span className="mt-2 flex items-center gap-2">
           <input
+            aria-label={field.label}
             className={inputClass}
             name={field.key}
             type="password"
@@ -154,7 +176,13 @@ function SettingInput({
             <span className="whitespace-nowrap rounded-lg bg-[var(--accent-soft)] px-2 py-1 text-xs font-semibold text-[var(--accent-strong)]">Saved</span>
           ) : null}
         </span>
-      </label>
+        {configured ? (
+          <label className="mt-2 flex items-center gap-2 text-xs text-[var(--danger)]">
+            <input name={`${field.key}__remove`} type="checkbox" />
+            Remove the saved value when this section is saved
+          </label>
+        ) : null}
+      </div>
     );
   }
 

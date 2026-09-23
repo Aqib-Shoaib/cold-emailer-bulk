@@ -108,7 +108,7 @@ async function SettingsView({ search }: { search: { notice?: string; error?: str
   const feedback = parseSettingsFeedback(search);
   const feedbackMessages: Partial<Record<SettingsFeedback["kind"], string>> = {
     saved: "Settings saved.",
-    forbidden: "Only the super admin can change settings.",
+    forbidden: "You cannot change settings.",
     encryption: "The server encryption key is missing; settings changes are disabled.",
     secret: "No password is configured yet for that connection. Save one first, then test.",
     test: "Enter the host and port before testing the connection.",
@@ -133,48 +133,8 @@ async function SettingsView({ search }: { search: { notice?: string; error?: str
           {validationMessage ?? feedbackMessages[feedback.kind]}
         </p>
       ) : null}
-      {currentUser.role === "SUPER_ADMIN" ? (
-        <SettingsForm sections={SETTING_SECTIONS} settings={settings} feedback={feedback} canManage />
-      ) : (
-        <p className="rounded-xl bg-[var(--warning-soft)] px-4 py-3 text-sm text-[var(--warning)]">
-          Only the super admin can edit settings. Values below are read-only.
-        </p>
-      )}
-      {currentUser.role !== "SUPER_ADMIN" ? <ReadonlySettings sections={SETTING_SECTIONS} settings={settings} /> : null}
+      <SettingsForm sections={SETTING_SECTIONS} settings={settings} feedback={feedback} />
     </Page>
-  );
-}
-
-function ReadonlySettings({ sections, settings }: { sections: typeof SETTING_SECTIONS; settings: Awaited<ReturnType<typeof toPublicSettings>> }) {
-  return (
-    <div className="space-y-4">
-      {sections.map((section) => (
-        <details key={section.id} className="group rounded-2xl border bg-[var(--surface)] shadow-[0_12px_34px_rgba(31,54,42,0.045)]">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-5 sm:px-6">
-            <div>
-              <h2 className="font-semibold tracking-tight">{section.title}</h2>
-            </div>
-            <span className="text-sm font-medium text-[var(--accent-strong)] group-open:hidden">Open</span>
-            <span className="hidden text-sm font-medium text-[var(--accent-strong)] group-open:inline">Close</span>
-          </summary>
-          <div className="grid gap-5 border-t p-5 sm:grid-cols-2 sm:p-6 xl:grid-cols-3">
-            {section.fields.map((field) => (
-              <div key={field.key}>
-                <p className="text-sm font-medium">{field.label}</p>
-                <p className="mt-1 text-xs leading-5 text-[var(--muted)]">{field.hint}</p>
-                <p className="mt-2 truncate text-sm">
-                  {field.secretField
-                    ? settings.secrets[field.secretField]
-                      ? "Configured"
-                      : "Not configured"
-                    : settings.values[field.key] || "—"}
-                </p>
-            </div>
-            ))}
-          </div>
-        </details>
-      ))}
-    </div>
   );
 }
 
