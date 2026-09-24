@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connect } from "node:net";
-import tls from "node:tls";
 import { getRequestSession, isSameOrigin, requestOrigin } from "@/lib/auth";
 import { decryptSecret, type SecretField } from "@/lib/crypto";
 import { getPrisma } from "@/lib/prisma";
@@ -12,6 +10,7 @@ import {
 } from "@/lib/settings";
 import type { InputJsonValue } from "@prisma/client/runtime/client";
 import { SECRET_SETTING_FIELDS, SETTING_FIELDS, SETTING_SECTIONS } from "@/lib/settings-schema";
+import { LineReader, plainConnection, probeSmtp, secureConnection } from "@/lib/smtp";
 
 function back(request: NextRequest, query: string) {
   return NextResponse.redirect(new URL(`/settings?${query}`, requestOrigin(request)), 303);
@@ -166,7 +165,7 @@ export async function POST(
 
   const result =
     sectionId === "smtp"
-      ? await probeSmtp({ ...probe, username: probe.username }, password)
+      ? await probeSmtp({ ...probe, password })
       : await probeImap(probe, password);
 
   await prisma.auditEvent.create({
@@ -204,221 +203,6 @@ interface ProbeTarget {
   heloName: string;
 }
 
-function plainConnection(host: string, port: number, timeoutMs: number) {
-  return new Promise<import("node:net").Socket>((resolve, reject) => {
-    const socket = connect({ host, port, timeout: timeoutMs });
-    const fail = (message: string) => {
-      socket.destroy();
-      reject(new Error(message));
-    };
-    socket.once("error", (error: Error) => fail(error.message));
-    socket.once("timeout", () => fail("Connection timed out"));
-    socket.once("connect", () => resolve(socket));
-  });
-}
-
-function secureConnection(host: string, port: number, timeoutMs: number) {
-  return new Promise<tls.TLSSocket>((resolve, reject) => {
-    const socket = tls.connect({ host, port, servername: host, timeout: timeoutMs });
-    const fail = (message: string) => {
-      socket.destroy();
-      reject(new Error(message));
-    };
-    socket.once("error", (error: Error) => fail(error.message));
-    socket.once("timeout", () => fail("Connection timed out"));
-    socket.once("secureConnect", () => resolve(socket));
-  });
-}
-
-/**
- * Buffered line reader for probe conversations. TLS can split a single reply
- * across records, so responses are assembled from a persistent buffer instead
- * of being matched per chunk.
- */
-class ProbeReader {
-  private lines: string[] = [];
-  private buffer = "";
-  private error: Error | null = null;
-  private wake: (() => void) | null = null;
-
-  constructor(socket: import("node:net").Socket | tls.TLSSocket) {
-    socket.on("data", (chunk: Buffer) => {
-      this.buffer += chunk.toString("utf8");
-      let index;
-      while ((index = this.buffer.indexOf("\n")) >= 0) {
-        let line = this.buffer.slice(0, index);
-        this.buffer = this.buffer.slice(index + 1);
-        if (line.endsWith("\r")) line = line.slice(0, -1);
-        this.lines.push(line);
-      }
-      this.wake?.();
-    });
-    socket.once("error", (error: Error) => {
-      this.error = error;
-      this.wake?.();
-    });
-    socket.once("close", () => {
-      this.error ??= new Error("The connection closed during the handshake");
-      this.wake?.();
-    });
-  }
-
-  async readLine(timeoutMs: number) {
-    const deadline = Date.now() + timeoutMs;
-    while (this.lines.length === 0) {
-      if (this.error) throw this.error;
-      const wait = deadline - Date.now();
-      if (wait <= 0) throw new Error("The server stopped responding during the handshake");
-      await new Promise<void>((resolveWake) => {
-        this.wake = resolveWake;
-        setTimeout(resolveWake, Math.min(wait, 250));
-      });
-      this.wake = null;
-    }
-    return this.lines.shift() as string;
-  }
-}
-
-/** Reads one full SMTP reply, joining multi-line "250-..." continuations. */
-async function readSmtpReply(reader: ProbeReader, timeoutMs: number) {
-  const first = await reader.readLine(timeoutMs);
-  const match = /^(\d{3})([ -])(.*)$/.exec(first);
-  if (!match) {
-    throw new Error(`The server sent an unexpected reply: ${first.slice(0, 200)}`);
-  }
-  const code = match[1];
-  let separator = match[2];
-  const parts = [match[3]];
-  while (separator === "-") {
-    const line = await reader.readLine(timeoutMs);
-    const continuation = /^(\d{3})([ -])(.*)$/.exec(line);
-    if (!continuation || continuation[1] !== code) {
-      throw new Error(`The server sent an unexpected reply: ${line.slice(0, 200)}`);
-    }
-    separator = continuation[2];
-    parts.push(continuation[3]);
-  }
-  return { code, text: parts.join("\n") };
-}
-
-async function writeAndReadSmtp(
-  reader: ProbeReader,
-  socket: import("node:net").Socket | tls.TLSSocket,
-  command: string,
-  timeoutMs: number,
-  check: (reply: { code: string; text: string }) => { ok: true } | { ok: false; message: string },
-) {
-  await new Promise<void>((resolveWrite, rejectWrite) => {
-    socket.write(`${command}\r\n`, (error) => (error ? rejectWrite(error) : resolveWrite()));
-  });
-  const reply = await readSmtpReply(reader, timeoutMs);
-  const outcome = check(reply);
-  if (!outcome.ok) throw new Error(outcome.message);
-  return reply;
-}
-
-async function smtpAuthLogin(
-  reader: ProbeReader,
-  socket: import("node:net").Socket | tls.TLSSocket,
-  username: string,
-  password: string,
-  timeoutMs: number,
-) {
-  await writeAndReadSmtp(reader, socket, "AUTH LOGIN", timeoutMs, (reply) =>
-    reply.code === "334" ? { ok: true } : { ok: false, message: `The server rejected the authentication request (${reply.code}).` },
-  );
-  await writeAndReadSmtp(reader, socket, Buffer.from(username).toString("base64"), timeoutMs, (reply) =>
-    reply.code.startsWith("3") || reply.code.startsWith("2")
-      ? { ok: true }
-      : { ok: false, message: `The server rejected the username (${reply.code}).` },
-  );
-  await writeAndReadSmtp(reader, socket, Buffer.from(password).toString("base64"), timeoutMs, (reply) =>
-    reply.code.startsWith("2")
-      ? { ok: true }
-      : { ok: false, message: `The SMTP username or password was rejected (${reply.code}). Check the credentials and try again.` },
-  );
-}
-
-async function probeRaw(target: ProbeTarget, password: string, tlsMode: string) {
-  const socket = await plainConnection(target.host, target.port, target.timeoutMs);
-  let reader = new ProbeReader(socket);
-  try {
-    const greeting = await readSmtpReply(reader, target.timeoutMs);
-    if (greeting.code !== "220") {
-      return { ok: false, message: `The server answered with an unexpected greeting (${greeting.code}).` };
-    }
-
-    let activeSocket: import("node:net").Socket | tls.TLSSocket = socket;
-    if (tlsMode === "STARTTLS") {
-      const ehlo = await writeAndReadSmtp(reader, activeSocket, `EHLO ${target.heloName}`, target.timeoutMs, (reply) =>
-        reply.code === "250" ? { ok: true } : { ok: false, message: "The server refused the EHLO handshake." });
-      if (!/STARTTLS/i.test(ehlo.text)) {
-        return { ok: false, message: "The server does not advertise STARTTLS. Choose the SSL mode or a different port." };
-      }
-      await writeAndReadSmtp(reader, activeSocket, "STARTTLS", target.timeoutMs, (reply) =>
-        reply.code === "220" ? { ok: true } : { ok: false, message: "The server refused to start TLS." });
-      activeSocket = await upgradeSocket(socket, target.host, target.timeoutMs);
-      // After the upgrade, data flows through the TLSSocket, so the reader
-      // must be re-created over the secure stream.
-      reader = new ProbeReader(activeSocket);
-    }
-
-    await writeAndReadSmtp(reader, activeSocket, `EHLO ${target.heloName}`, target.timeoutMs, (reply) =>
-      reply.code === "250" ? { ok: true } : { ok: false, message: "The server refused the EHLO handshake." });
-    await smtpAuthLogin(reader, activeSocket, target.username, password, target.timeoutMs);
-    socket.write("QUIT\r\n", () => undefined);
-    return { ok: true, message: "" };
-  } finally {
-    socket.destroy();
-  }
-}
-
-function upgradeSocket(socket: import("node:net").Socket, host: string, timeoutMs: number) {
-  return new Promise<tls.TLSSocket>((resolve, reject) => {
-    const secure = tls.connect({ socket, servername: host });
-    const timer = setTimeout(() => {
-      secure.destroy();
-      reject(new Error("The TLS handshake timed out"));
-    }, timeoutMs);
-    secure.once("secureConnect", () => {
-      clearTimeout(timer);
-      resolve(secure);
-    });
-    secure.once("error", (error: Error) => {
-      clearTimeout(timer);
-      reject(new Error(`The TLS handshake failed: ${error.message}`));
-    });
-  });
-}
-
-async function probeSmtp(target: ProbeTarget, password: string) {
-  if (!target.host || !target.port || Number.isNaN(target.port)) {
-    return { ok: false, message: "SMTP host and port are required." };
-  }
-  try {
-    if (target.tlsMode === "SSL") {
-      const socket = await secureConnection(target.host, target.port, target.timeoutMs);
-      const reader = new ProbeReader(socket);
-      try {
-        const greeting = await readSmtpReply(reader, target.timeoutMs);
-        if (greeting.code !== "220") {
-          return { ok: false, message: `The server answered with an unexpected greeting (${greeting.code}).` };
-        }
-        await writeAndReadSmtp(reader, socket, `EHLO ${target.heloName}`, target.timeoutMs, (reply) =>
-          reply.code === "250" ? { ok: true } : { ok: false, message: "The server refused the EHLO handshake." });
-        await smtpAuthLogin(reader, socket, target.username, password, target.timeoutMs);
-        socket.write("QUIT\r\n", () => undefined);
-        return { ok: true, message: "" };
-      } finally {
-        socket.destroy();
-      }
-    }
-    return await probeRaw(target, password, target.tlsMode);
-  } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : "The SMTP connection failed." };
-  }
-}
-
 async function probeImap(target: ProbeTarget, password: string) {
   if (!target.host || !target.port || Number.isNaN(target.port)) {
     return { ok: false, message: "IMAP host and port are required." };
@@ -435,7 +219,7 @@ async function probeImapConnection(target: ProbeTarget, password: string, useTls
   const socket = useTls
     ? await secureConnection(target.host, target.port, target.timeoutMs)
     : await plainConnection(target.host, target.port, target.timeoutMs);
-  const reader = new ProbeReader(socket);
+  const reader = new LineReader(socket);
   try {
     const greeting = await reader.readLine(target.timeoutMs);
     if (!/^\* (OK|PREAUTH)/.test(greeting)) {

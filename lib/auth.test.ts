@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { digest, isSameOrigin, loginThrottleKey, normalizeEmail, requestOrigin } from "./auth.ts";
+import { digest, isSameOrigin, loginThrottleKey, normalizeEmail, recoveryThrottleKey, requestOrigin } from "./auth.ts";
 
 test("normalizes email and creates stable non-plain throttle keys", () => {
   assert.equal(normalizeEmail(" Admin@Example.COM "), "admin@example.com");
   assert.equal(loginThrottleKey("Admin@Example.com"), loginThrottleKey(" admin@example.COM "));
   assert.equal(loginThrottleKey("admin@example.com").length, 64);
   assert.ok(!loginThrottleKey("admin@example.com").includes("admin"));
+  assert.equal(recoveryThrottleKey("Admin@Example.com"), recoveryThrottleKey(" admin@example.COM "));
+  assert.notEqual(recoveryThrottleKey("admin@example.com"), loginThrottleKey("admin@example.com"));
 });
 
 test("digests opaque session tokens", () => {

@@ -6,6 +6,7 @@ export const SESSION_COOKIE = "cold_emailer_session";
 export const SESSION_SECONDS = 60 * 60 * 24 * 7;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_FAILURE_LIMIT = 5;
+const RECOVERY_REQUEST_LIMIT = 3;
 
 export function digest(value: string) {
   return createHash("sha256").update(value).digest("hex");
@@ -17,6 +18,10 @@ export function normalizeEmail(value: string) {
 
 export function loginThrottleKey(email: string) {
   return digest(`login:${normalizeEmail(email)}`);
+}
+
+export function recoveryThrottleKey(email: string) {
+  return digest(`recovery:${normalizeEmail(email)}`);
 }
 
 export function isSameOrigin(request: NextRequest) {
@@ -36,22 +41,36 @@ export function requestOrigin(request: NextRequest) {
 }
 
 export async function isLoginBlocked(email: string) {
+  return isThrottleBlocked(loginThrottleKey(email), LOGIN_FAILURE_LIMIT);
+}
+
+export async function isRecoveryBlocked(email: string) {
+  return isThrottleBlocked(recoveryThrottleKey(email), RECOVERY_REQUEST_LIMIT);
+}
+
+async function isThrottleBlocked(key: string, limit: number) {
   const throttle = await getPrisma().authThrottle.findUnique({
-    where: { key: loginThrottleKey(email) },
+    where: { key },
   });
 
-  return Boolean(
-    throttle && throttle.resetAt > new Date() && throttle.failures >= LOGIN_FAILURE_LIMIT,
-  );
+  return Boolean(throttle && throttle.resetAt > new Date() && throttle.failures >= limit);
 }
 
 export async function recordLoginFailure(email: string) {
+  await recordThrottle(loginThrottleKey(email));
+}
+
+export async function recordRecoveryRequest(email: string) {
+  await recordThrottle(recoveryThrottleKey(email));
+}
+
+async function recordThrottle(key: string) {
   const now = new Date();
   const resetAt = new Date(now.getTime() + LOGIN_WINDOW_MS);
 
   await getPrisma().$executeRaw`
     INSERT INTO "auth_throttles" ("key", "failures", "reset_at", "updated_at")
-    VALUES (${loginThrottleKey(email)}, 1, ${resetAt}, ${now})
+    VALUES (${key}, 1, ${resetAt}, ${now})
     ON CONFLICT ("key") DO UPDATE SET
       "failures" = CASE
         WHEN "auth_throttles"."reset_at" <= ${now} THEN 1

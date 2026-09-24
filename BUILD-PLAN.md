@@ -266,7 +266,7 @@ test containers and volume were removed.
 
 ### Phase 2 — Authentication and minimal user management
 
-**Status:** IN PROGRESS
+**Status:** DONE
 
 **Goal:** Protect every private route and implement only the requested
 `SUPER_ADMIN`/`ADMIN` distinction.
@@ -291,7 +291,7 @@ test containers and volume were removed.
 **Acceptance:**
 
 - [x] An unauthenticated request cannot access pages, data routes, or worker controls.
-- [ ] Login, logout, expiry, password change, and recovery each pass.
+- [x] Login, logout, expiry, password change, and recovery each pass.
 - [x] A revoked session stops working immediately.
 - [x] The seed creates exactly one `SUPER_ADMIN` without hardcoded credentials.
 - [x] Users created in the panel are always `ADMIN`.
@@ -305,13 +305,20 @@ opaque sessions with hashed tokens, secure HTTP-only cookies, logout with
 immediate server-side revocation, and persistent login throttling. Prisma
 validation/client generation, unit tests, TypeScript, ESLint, and diff checks
 pass. A Docker production build and both migrations passed against an isolated
-PostgreSQL 18 database; its containers and volume were then removed. Email OTP
-recovery remains to be implemented; the Phase 3 SMTP settings source is now
-available. Added real user
+PostgreSQL 18 database; its containers and volume were then removed. Added real user
 management, password changes, revoke-other-sessions, audit events, and mobile
 logout. An isolated Docker test verified unauthenticated redirects, login/logout,
 admin creation, admin authorization denial, super-admin protection, password
 change, audit records, and immediate session revocation after deactivation.
+2026-09-24 — Added throttled email OTP recovery with a keyed six-digit code,
+10-minute expiry, five-attempt limit, one-time transactional consumption,
+password replacement, full session revocation, and audit events. SMTP delivery
+reuses the settings connection and validates headers, addresses, TLS mode, and
+dot-stuffing. A clean PostgreSQL 18 database applied all five migrations; a
+fake SMTP end-to-end check delivered the OTP, rejected replay and the old
+password, accepted the new password, revoked the old session, and recorded both
+recovery audit events. Unit tests, Prisma validation, TypeScript, ESLint, diff
+checks, and a production webpack build pass; disposable resources were removed.
 
 ---
 
@@ -617,7 +624,7 @@ what SMTP can prove.
 |---|---|---|---|
 | 0. Decisions and limits | IN PROGRESS | — | VPS with Docker Compose selected |
 | 1. Foundation | DONE | 2026-09-23 | Prisma/Docker, responsive UI shell, preview routes, and live database health verified |
-| 2. Authentication and users | IN PROGRESS | 2026-09-23 | Login, sessions, user management, and audit verified; email OTP recovery remains |
+| 2. Authentication and users | DONE | 2026-09-24 | Login, sessions, user management, throttled OTP recovery, revocation, and audit verified end-to-end |
 | 3. Settings | DONE | 2026-09-24 | Complete searchable inventory, encrypted replace/remove secrets, validation, kill switch, and SMTP/IMAP probes verified |
 | 4. Contacts | NOT STARTED | — | — |
 | 5. Templates | NOT STARTED | — | — |
@@ -659,3 +666,4 @@ Append one short row whenever phase status changes.
 | 2026-09-24 | 3 | Backend slice started | `app_settings` migration, AES-256-GCM secret store, registry validation, save/test routes, kill-switch state in shell |
 | 2026-09-24 | 3 | Probes verified live | Fake SMTP/IMAP servers confirmed accept, reject, refused, and stored-secret paths; auth matrix and audit verified on disposable stack |
 | 2026-09-24 | 3 | Completed | Full inventory/search, shared admin access, secret removal, validation, secure TLS probes, checks, and production build pass |
+| 2026-09-24 | 2 | Completed | SMTP OTP recovery, expiry/attempt limits, one-time reset, session revocation, audit, and clean-database smoke test passed |

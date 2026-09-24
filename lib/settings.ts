@@ -215,7 +215,7 @@ export function toPublicSettings(
   secrets: Partial<Record<SecretField, string | null>>,
   encryptionKey: string,
 ): PublicSettings {
-  const values: SettingsValues = { ...settingsDefaults(), ...asRecord(stored.values) };
+  const values = settingsValues(stored.values);
   const configured = {} as Record<SecretField, boolean>;
   for (const field of SECRET_FIELDS) {
     configured[field] = isSecretConfigured(encryptionKey, secrets[field]);
@@ -228,6 +228,10 @@ export function toPublicSettings(
     sendingPausedReason: stored.sendingPausedReason,
     updatedAt: stored.updatedAt.toISOString(),
   };
+}
+
+export function settingsValues(stored: unknown): SettingsValues {
+  return { ...settingsDefaults(), ...asRecord(stored) };
 }
 
 function asRecord(value: unknown): Record<string, string> {

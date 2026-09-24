@@ -1,15 +1,18 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
+import Link from "next/link";
 import { getSessionUser, SESSION_COOKIE } from "@/lib/auth";
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; notice?: string }>;
 }) {
   const cookieStore = await cookies();
   if (await getSessionUser(cookieStore.get(SESSION_COOKIE)?.value)) redirect("/");
-  const invalid = (await searchParams).error === "invalid";
+  const query = await searchParams;
+  const invalid = query.error === "invalid";
+  const reset = query.notice === "password-reset";
 
   return (
     <main className="grid min-h-[100dvh] place-items-center px-4 py-10">
@@ -21,12 +24,13 @@ export default async function LoginPage({
         <h1 className="mt-8 text-2xl font-semibold tracking-tight">Sign in</h1>
         <p className="mt-2 text-sm leading-6 text-[var(--muted)]">Use the account created for you by the workspace owner.</p>
         {invalid ? <p role="alert" className="mt-5 rounded-xl bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]">The email or password is incorrect, the account is inactive, or too many attempts were made.</p> : null}
+        {reset ? <p role="status" className="mt-5 rounded-xl bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--accent-strong)]">Your password was reset. Sign in with the new password.</p> : null}
         <form action="/api/auth/login" method="post" className="mt-6 space-y-4">
           <label className="block text-sm font-medium" htmlFor="email">Email address<input className="input mt-2" id="email" name="email" type="email" autoComplete="email" required autoFocus /></label>
           <label className="block text-sm font-medium" htmlFor="password">Password<input className="input mt-2" id="password" name="password" type="password" autoComplete="current-password" required /></label>
           <button className="flex h-11 w-full items-center justify-center rounded-xl bg-[var(--accent)] px-4 text-sm font-semibold text-white hover:brightness-95 active:translate-y-px" type="submit">Sign in</button>
         </form>
-        <p className="mt-5 text-center text-xs text-[var(--muted)]">Forgot your password? Email OTP recovery is being connected with workspace SMTP settings.</p>
+        <p className="mt-5 text-center text-xs"><Link href="/recover" className="font-semibold text-[var(--accent-strong)] hover:underline">Forgot your password?</Link></p>
       </section>
     </main>
   );

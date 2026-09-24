@@ -25,8 +25,21 @@ model User {
   sessions     Session[]
   auditEvents  AuditEvent[]
   settingsUpdates AppSettings[]
+  passwordReset PasswordReset?
 
   @@map("users")
+}
+
+model PasswordReset {
+  userId    String   @id @map("user_id") @db.Uuid
+  codeHash  String   @map("code_hash") @db.Char(64)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("password_resets")
 }
 
 model Session {
