@@ -25,6 +25,15 @@ export interface SettingSectionDef {
 
 const enabled = ["Enabled", "Disabled"] as const;
 const pausedChoice = ["Paused", "Sending allowed"] as const;
+export const GEMINI_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+  "gemini-3.1-pro-preview",
+] as const;
 
 function field(def: SettingFieldDef): SettingFieldDef {
   return def;
@@ -48,6 +57,7 @@ export const SETTING_SECTIONS: readonly SettingSectionDef[] = [
       field({ key: "senderDisplayName", label: "Sender display name", hint: "Default name recipients see.", type: "text", default: "Outreach Team", maxLength: 120 }),
       field({ key: "defaultReplyTo", label: "Default reply-to", hint: "Where direct replies are sent. Leave empty to use the SMTP account.", type: "email", default: "", maxLength: 320 }),
       field({ key: "physicalAddress", label: "Physical mailing address", hint: "Required in compliant campaign footers.", type: "textarea", default: "", maxLength: 500 }),
+      field({ key: "recipientConsentBasis", label: "Recipient source / consent basis", hint: "Record why these recipients may be contacted. Required before a campaign can be scheduled.", type: "textarea", default: "", maxLength: 2000 }),
       field({ key: "unsubscribeFooter", label: "Default unsubscribe footer", hint: "Added to every bulk email with a working unsubscribe link.", type: "textarea", default: "You can unsubscribe at any time.", maxLength: 1000 }),
       field({ key: "timezone", label: "Application timezone", hint: "IANA name controlling schedules, quiet hours, and reporting.", type: "timezone", default: "Asia/Karachi", maxLength: 64 }),
       field({ key: "dateTimeFormat", label: "Date and time format", hint: "Display format used throughout the application. Leave empty to use the locale default.", type: "text", default: "", maxLength: 80 }),
@@ -72,9 +82,11 @@ export const SETTING_SECTIONS: readonly SettingSectionDef[] = [
       numberField("smtpConnectionTimeoutSeconds", "Connection timeout", "Stops slow connection attempts.", 5, 120, 20),
       numberField("smtpMaxPerMinute", "Messages per minute", "Provider-safe short-term limit.", 1, 600, 10),
       numberField("smtpMaxPerHour", "Messages per hour", "Provider-safe hourly limit.", 1, 20000, 120),
-      numberField("smtpMaxPerDay", "Messages per day", "Hard daily safety limit.", 1, 100000, 500),
-      numberField("smtpBatchSize", "Batch size", "Maximum messages claimed by a worker at once.", 1, 1000, 25),
-      numberField("smtpDelayJitterSeconds", "Delay jitter", "Random delay range between sends, in seconds.", 0, 3600, 10),
+      numberField("smtpMaxPerDay", "Messages per day", "Global daily cap across every campaign.", 1, 100000, 2500),
+      numberField("smtpBatchMinSize", "Minimum batch size", "Smallest randomized send cycle.", 1, 1000, 40),
+      numberField("smtpBatchMaxSize", "Maximum batch size", "Largest randomized send cycle.", 1, 1000, 50),
+      numberField("smtpBatchIntervalMinMinutes", "Minimum batch interval", "Shortest randomized wait between send cycles, in minutes.", 1, 1440, 3),
+      numberField("smtpBatchIntervalMaxMinutes", "Maximum batch interval", "Longest randomized wait between send cycles, in minutes.", 1, 1440, 7),
       numberField("smtpRetryCount", "Retry count", "Retries before a send is marked failed.", 0, 20, 3),
       numberField("smtpRetryBackoffSeconds", "Retry backoff", "Initial delay between retries, in seconds.", 1, 86400, 60),
       field({ key: "smtpQuietDays", label: "Quiet days", hint: "Comma-separated weekdays when campaigns must not send. Leave empty for none.", type: "text", default: "", maxLength: 100 }),
@@ -89,7 +101,7 @@ export const SETTING_SECTIONS: readonly SettingSectionDef[] = [
     fields: [
       field({ key: "imapHost", label: "IMAP host", hint: "Hostname supplied by your email provider.", type: "text", default: "", maxLength: 255 }),
       numberField("imapPort", "IMAP port", "Usually 993 for secure IMAP.", 1, 65535, 993),
-      field({ key: "imapTlsMode", label: "TLS mode", hint: "Secure connection mode.", type: "select", options: ["TLS", "NONE"], default: "TLS" }),
+      field({ key: "imapTlsMode", label: "TLS mode", hint: "Secure connection mode required by the provider.", type: "select", options: ["TLS", "STARTTLS", "NONE"], default: "TLS" }),
       field({ key: "imapUsername", label: "IMAP username", hint: "Mailbox or provider username.", type: "text", default: "", maxLength: 320 }),
       field({ key: "imapPassword", label: "IMAP password", hint: "Stored encrypted. Enter a new value to replace it; leave empty to keep the current one.", type: "text", default: "", maxLength: 500, secretField: "imap_password_enc" }),
       field({ key: "imapFolder", label: "Mailbox folder", hint: "Folder checked for new messages.", type: "text", default: "INBOX", maxLength: 100 }),
@@ -110,7 +122,6 @@ export const SETTING_SECTIONS: readonly SettingSectionDef[] = [
       numberField("maxAudienceSize", "Maximum audience", "Largest allowed campaign audience.", 1, 100000, 1000),
       numberField("minimumStartDelayMinutes", "Minimum start delay", "Required review window before sending begins, in minutes.", 0, 10080, 15),
       numberField("defaultDailyCap", "Default daily cap", "Per-campaign limit before the mailbox limit.", 1, 100000, 250),
-      numberField("maxConcurrentCampaigns", "Concurrent campaigns", "Maximum campaigns sending together.", 1, 20, 2),
       numberField("duplicateSendWindowDays", "Duplicate-send window", "Days before the same contact can be queued again.", 0, 365, 30),
       numberField("bounceRateThresholdPercent", "Bounce threshold", "Campaigns above this bounce rate pause automatically.", 0, 100, 5),
       enabledField("stopOnReply", "Stop on reply", "Cancel remaining follow-ups after a contact replies.", "Enabled"),
@@ -122,12 +133,10 @@ export const SETTING_SECTIONS: readonly SettingSectionDef[] = [
   {
     id: "ai",
     title: "AI drafting",
-    description: "Drafting configuration remains inactive until an approved provider and model are selected for Phase 7.",
+    description: "Google Gemini generates drafts from approved knowledge. API keys are encrypted and never shown again.",
     fields: [
-      field({ key: "aiProvider", label: "Provider", hint: "Approved AI provider name. Leave empty until the Phase 7 decision is made.", type: "text", default: "", maxLength: 100 }),
-      field({ key: "aiEndpoint", label: "API endpoint", hint: "Provider endpoint when a custom or compatible API requires one.", type: "url", default: "", maxLength: 500 }),
       field({ key: "aiApiKey", label: "API key", hint: "Stored encrypted. Enter a new value to replace it; leave empty to keep the current one.", type: "text", default: "", maxLength: 1000, secretField: "ai_api_key_enc" }),
-      field({ key: "aiModel", label: "Model", hint: "Approved model identifier supplied by the provider.", type: "text", default: "", maxLength: 160 }),
+      field({ key: "aiModel", label: "Model", hint: "Supported Gemini text model. Gemini 3.8 Flash is the recommended default.", type: "select", options: GEMINI_MODELS, default: "gemini-3.8-flash" }),
       numberField("aiTemperaturePercent", "Creativity", "Sampling temperature as a percentage.", 0, 200, 40),
       numberField("aiMaxOutputLength", "Maximum output length", "Maximum generated tokens per draft.", 100, 32000, 2000),
       numberField("aiTimeoutSeconds", "Timeout", "Seconds before a generation attempt is stopped.", 5, 600, 60),

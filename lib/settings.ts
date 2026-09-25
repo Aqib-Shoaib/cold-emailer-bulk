@@ -132,6 +132,17 @@ export function validateSettingsInput(input: SettingsInput, options: { publicApp
     }
   }
 
+  for (const [minimum, maximum] of [
+    ["smtpBatchMinSize", "smtpBatchMaxSize"],
+    ["smtpBatchIntervalMinMinutes", "smtpBatchIntervalMaxMinutes"],
+  ] as const) {
+    const min = Number(input[minimum]);
+    const max = Number(input[maximum]);
+    if (Number.isFinite(min) && Number.isFinite(max) && min > max) {
+      errors.push({ field: maximum, message: "Must be greater than or equal to the minimum" });
+    }
+  }
+
   if (!errors.length) {
     const pausedRaw = (input[SENDING_PAUSED_FIELD] ?? "").trim();
     const reasonRaw = (input[SENDING_PAUSED_REASON_FIELD] ?? "").trim();
@@ -231,7 +242,23 @@ export function toPublicSettings(
 }
 
 export function settingsValues(stored: unknown): SettingsValues {
-  return { ...settingsDefaults(), ...asRecord(stored) };
+  const values = { ...settingsDefaults(), ...asRecord(stored) };
+  for (const field of SETTING_FIELDS) {
+    if (field.type === "select" && !field.options?.includes(values[field.key])) values[field.key] = field.default;
+  }
+  return values;
+}
+
+export function sendingReadinessErrors(values: SettingsValues, smtpPasswordConfigured: boolean) {
+  const required = [
+    ["senderDisplayName", "sender name"], ["companyName", "company name"], ["physicalAddress", "physical address"],
+    ["recipientConsentBasis", "recipient source / consent basis"], ["publicBaseUrl", "public base URL"],
+    ["smtpHost", "SMTP host"], ["smtpUsername", "SMTP username"], ["smtpFromAddress", "SMTP from address"],
+  ] as const;
+  const errors: string[] = required.filter(([key]) => !values[key]?.trim()).map(([, label]) => label);
+  if (!smtpPasswordConfigured) errors.push("SMTP password");
+  if ((values.openTrackingEnabled === "Enabled" || values.clickTrackingEnabled === "Enabled") && !values.privacyNotice.trim()) errors.push("privacy notice for enabled tracking");
+  return errors;
 }
 
 function asRecord(value: unknown): Record<string, string> {

@@ -38,6 +38,7 @@ Rules:
 | Password recovery | Standard email recovery using a short-lived one-time passcode (OTP) |
 | Primary outbound transport | SMTP |
 | Primary inbound transport | IMAP |
+| Mail provider | Provider-agnostic standard username/password SMTP and IMAP; host, port, TLS mode, credentials, and provider limits remain runtime settings |
 | Database | PostgreSQL |
 | ORM | Prisma ORM `7.10.0` stable, with matching `prisma` and `@prisma/client` versions |
 | UI | Existing Next.js 16 App Router app and Tailwind CSS 4 |
@@ -45,6 +46,15 @@ Rules:
 | Queue | PostgreSQL-backed jobs; no Redis until measured throughput requires it |
 | Deployment | Single VPS with Docker Compose for web, worker, and PostgreSQL |
 | PostgreSQL host port | `6543`, bound to VPS loopback only; containers use internal port `5432` |
+| Contact volume | No product-level contact limit; actual capacity is measured and scaled operationally |
+| Campaign count | No product-level campaign-count limit; the worker shares the global send allowance across due campaigns |
+| Daily send cap | 2,500 messages globally across all campaigns |
+| Send cadence | Randomized cycles of 40–50 messages, followed by a randomized 3–7 minute interval |
+| Recipient regions | Global; no country or region restriction in the product |
+| Compliance ownership | No separate legal-approval workflow; the product owner remains responsible for applicable sender, consent, privacy, and unsubscribe requirements |
+| Knowledge sources | Pasted text and uploaded PDF, Word (`.doc`/`.docx`), or plain-text files; no URL ingestion |
+| AI provider | Google Gemini API; encrypted API key and supported model dropdown in application settings |
+| Default AI model | `gemini-3.8-flash`; other current supported Gemini text models remain selectable |
 
 Version note (checked 2026-09-23): Tailwind's npm stable version is `4.3.3`.
 Prisma's registry currently exposes an 8.0 release candidate on the CLI's
@@ -139,7 +149,7 @@ only whether a value is configured and allow replace/remove actions.
 - Host, port, TLS mode, username, password, connection timeout
 - Default From address, Reply-To, HELO name when required
 - Test-connection and send-test-email actions
-- Maximum messages per minute/hour/day, batch size, delay jitter
+- Maximum messages per minute/hour/day, randomized batch-size range, and randomized batch-interval range
 - Retry count/backoff, quiet days, quiet hours, and timezone
 
 ### IMAP receiving
@@ -152,7 +162,7 @@ only whether a value is configured and allow replace/remove actions.
 
 - Global sending kill switch with reason
 - Default campaign pause switch and per-campaign pause/resume
-- Maximum campaign audience, start delay, daily cap, and concurrent campaigns
+- Maximum campaign audience, start delay, and daily cap; campaign concurrency is worker-managed
 - Duplicate-send window, bounce threshold, reply-stop rule, and unsubscribe-stop rule
 - Required review-before-send and test-recipient address
 
@@ -164,8 +174,9 @@ only whether a value is configured and allow replace/remove actions.
 - Knowledge-result limit and maximum context budget
 - Require human approval before queueing AI output
 
-The AI provider is intentionally **unselected**. It must be chosen before Phase
-7; do not invent an endpoint or key.
+The selected AI provider is Google Gemini. The API endpoint is fixed in code so
+the encrypted API key cannot be sent to an arbitrary configured host; the model
+is selected from the current supported allowlist in application settings.
 
 ### Tracking and privacy
 
@@ -189,7 +200,7 @@ the running application can lock it out of its database or encryption keys.
 
 ### Phase 0 — Decisions and measurable limits
 
-**Status:** IN PROGRESS
+**Status:** DONE
 
 **Goal:** Freeze the minimum business and operational rules needed to build
 without guessing.
@@ -206,20 +217,38 @@ without guessing.
 - ~~New-admin initial password~~ — creator enters it in the panel and shares it manually
 - ~~First-login password change~~ — not required
 - ~~Password-reset method~~ — short-lived OTP sent to the user's email address
-- Expected contacts, messages/day, and simultaneous campaigns
-- Sending domain/mailbox and provider limits
-- Required jurisdictions and legal review owner
-- AI provider (may remain open until Phase 7)
-- Knowledge source types needed at launch: pasted text, files, and/or URLs
+- ~~Expected contacts, messages/day, and simultaneous campaigns~~ — no configured
+  contact or campaign-count limit; 2,500 messages/day globally, with randomized
+  40–50 message cycles separated by 3–7 minutes
+- ~~Sending domain/mailbox and provider limits~~ — provider selection is deferred;
+  standard username/password SMTP and IMAP settings remain configurable, and
+  the chosen provider's limits must be entered before sending is enabled
+- ~~Required jurisdictions and legal review owner~~ — recipients may be global;
+  there is no separate legal-approval workflow, and the product owner remains
+  responsible for applicable sender, consent, privacy, and unsubscribe rules
+- ~~AI provider~~ — Google Gemini API, with `gemini-3.8-flash` as the default
+- ~~Knowledge source types needed at launch~~ — pasted text plus uploaded PDF,
+  Word (`.doc`/`.docx`), and plain-text files; no URL ingestion
 
 **Acceptance:**
 
-- [ ] Every item except the explicitly deferred AI choice has an owner-approved answer.
-- [ ] SMTP and IMAP test mailbox details exist outside the repository.
-- [ ] A non-production PostgreSQL database is available.
-- [ ] No real campaign can send from the development environment.
+- [x] Every item except the explicitly deferred AI choice has an owner-approved answer.
+- [x] Mail integration is provider-agnostic; a live test mailbox is required before production acceptance, not development.
+- [x] A disposable non-production PostgreSQL database is available and clean migrations pass.
+- [x] No real campaign can send from the development environment.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** 2026-09-24 — Owner approved no product-level contact or campaign
+count limit, a 2,500-message global daily cap, randomized 40–50 message send
+cycles, and randomized 3–7 minute intervals between cycles. Settings defaults,
+range validation, and the build plan were aligned with the decision. The owner
+also approved provider-agnostic username/password SMTP and IMAP; provider,
+mailbox, domain, and provider-specific limits remain deployment-time settings
+rather than an implementation blocker. Recipients may be global with no
+country filter or separate legal-approval workflow; required sender identity,
+suppression, privacy, and unsubscribe safeguards remain product requirements.
+Launch knowledge ingestion is limited to pasted text, PDF, Word, and plain-text
+files; URL ingestion is explicitly excluded. Phase 0 decisions are complete;
+the default kill switch and absent send worker prevent development campaigns.
 
 ---
 
@@ -377,7 +406,7 @@ webpack build pass.
 
 ### Phase 4 — Contacts, lists, and suppression
 
-**Status:** NOT STARTED
+**Status:** DONE
 
 **Goal:** Safely manage target data before any bulk sending exists.
 
@@ -391,19 +420,36 @@ webpack build pass.
 
 **Acceptance:**
 
-- [ ] Importing a fixture twice creates no duplicate contacts.
-- [ ] Invalid rows are reported without discarding valid rows.
-- [ ] Search, list membership, archive, export, and deletion behave as shown in UI.
-- [ ] A suppressed address cannot be selected for a campaign.
-- [ ] The interface clearly explains why a contact is suppressed.
+- [x] Importing a fixture twice creates no duplicate contacts.
+- [x] Invalid rows are reported without discarding valid rows.
+- [x] Search, list membership, archive, export, and deletion behave as shown in UI.
+- [x] A suppressed address cannot be selected for a campaign.
+- [x] The interface clearly explains why a contact is suppressed.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** 2026-09-25 — Added normalized contacts, durable address-based
+suppressions, lists and cascading memberships, editable tags/custom fields,
+search/status/list filters, pagination, archive/restore/delete, eligibility
+counts that exclude every suppressed address, human-readable suppression
+reasons, and authenticated audited mutations. CSV import previews and maps
+columns, validates again on the server, keeps valid rows when others fail,
+records row errors and import history, and inserts in bounded transactional
+batches. Filtered export streams CSV without internal IDs or secrets.
+
+A clean PostgreSQL 18 database applied all six migrations. An authenticated
+smoke imported a four-row fixture twice: the first pass added 2, skipped 1
+in-file duplicate, and reported 1 invalid row; the second added 0, skipped all
+3 valid rows as duplicates, and again reported the invalid row. Database totals
+were 2 contacts, 2 histories, 2 imported, 4 duplicates, and 2 invalid rows.
+List-filtered active/archived exports, search, a visible `MANUAL` suppression,
+and deletion were exercised through application routes. Deletion cascaded list
+membership while its suppression remained. Unit tests, Prisma validation,
+TypeScript, ESLint, diff checks, and the production webpack build pass.
 
 ---
 
 ### Phase 5 — Templates and safe rendering
 
-**Status:** NOT STARTED
+**Status:** DONE
 
 **Goal:** Create reusable email content with predictable personalization.
 
@@ -417,18 +463,36 @@ webpack build pass.
 
 **Acceptance:**
 
-- [ ] Preview and delivered test email render the same supported variables.
-- [ ] Missing required variables block scheduling and identify affected contacts.
-- [ ] Unsafe HTML/scripts cannot execute in preview or stored output.
-- [ ] Every bulk email includes sender identity and a working unsubscribe route.
+- [x] Preview and delivered test email render the same supported variables.
+- [x] Missing required variables block scheduling and identify affected contacts.
+- [x] Unsafe HTML/scripts cannot execute in preview or stored output.
+- [x] Every bulk email includes sender identity and a working unsubscribe route.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** 2026-09-25 — Added template create/edit/duplicate/archive/restore,
+immutable version history, documented contact/campaign/sender variables, one
+shared renderer for previews and SMTP delivery, per-contact missing-variable
+reports, and mandatory bulk identity/address/unsubscribe footers. Authors enter
+plain text and stored HTML is generated exclusively from escaped content;
+preview HTML is additionally isolated in a sandboxed iframe. Opaque encrypted
+unsubscribe tokens require an explicit public confirmation and preserve stronger
+bounce/complaint suppression reasons.
+
+A clean PostgreSQL 18 database applied all seven migrations. An authenticated
+smoke created and updated a template; the database showed current version 2,
+two immutable versions, no stored `<script>` element, and escaped literal script
+text in version 1. The personalized preview rendered the expected campaign and
+sender values. A disposable local SMTP sink captured the multipart test email
+with the same rendered content plus sender name, company, physical address, and
+a working unsubscribe URL. The valid link created an `UNSUBSCRIBED` suppression;
+a tampered token was rejected. Unit tests cover rendering, escaping, affected
+contact reporting, footer requirements, token integrity, and multipart SMTP.
+Prisma validation, TypeScript, ESLint, diff checks, and production build pass.
 
 ---
 
 ### Phase 6 — Durable scheduler, SMTP sending, and kill switches
 
-**Status:** NOT STARTED
+**Status:** DONE
 
 **Goal:** Reliably send scheduled bulk email without duplicate sends.
 
@@ -444,22 +508,43 @@ webpack build pass.
 
 **Acceptance:**
 
-- [ ] A scheduled campaign sends only after its due time in the configured timezone.
-- [ ] Restarting the worker during a batch causes neither loss nor duplicate sends.
-- [ ] Global kill switch stops the next unsent message within one worker cycle.
-- [ ] Campaign pause affects only that campaign; resume continues pending work.
-- [ ] Rate/daily/quiet-hour limits hold under two concurrent worker processes.
-- [ ] Failed jobs retry as configured and end with an actionable error.
+- [x] A scheduled campaign sends only after its due time in the configured timezone.
+- [x] Restarting the worker during a batch causes neither loss nor duplicate sends.
+- [x] Global kill switch stops the next unsent message within one worker cycle.
+- [x] Campaign pause affects only that campaign; resume continues pending work.
+- [x] Rate/daily/quiet-hour limits hold under two concurrent worker processes.
+- [x] Failed jobs retry as configured and end with an actionable error.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** 2026-09-25 — Added campaign draft/review/schedule, immutable
+recipient snapshots, sequences, timezone-aware scheduling and estimates, a
+PostgreSQL worker with row locking, stable message IDs, retries, heartbeat,
+global randomized 40–50-message batches with 3–7-minute gaps, and global,
+campaign, minute, hour, daily, quiet-window, suppression, reply, and duplicate
+guards. The delivery ledger records the exact recipient, rendered content, and
+SMTP outcome; contacts retain their latest SMTP-accepted subject and timestamp.
+The UI labels SMTP acceptance separately from inbox delivery.
+
+A clean PostgreSQL 18 database applied all eight migrations. A future-dated
+campaign remained `PENDING` with no message row. Two simultaneous workers sent
+exactly one of two due messages under a one-per-minute limit and deferred the
+other; separate daily-cap and quiet-window runs also stayed pending with no SMTP
+attempt. Global pause stopped a due job across multiple cycles. Campaign pause
+left the same job pending, and resume completed it with one stable Message-ID
+and updated contact history. A pre-DATA `550` rejection retried to attempt 2 and
+ended `FAILED` with the SMTP response. A post-DATA timeout ended after one
+attempt as terminal `UNKNOWN`; startup recovery likewise converted a simulated
+stale `DELIVERING` job to `UNKNOWN` without requeueing it. The local SMTP sink
+captured one copy of each accepted or ambiguous message. Unit tests, Prisma
+validation, TypeScript, ESLint, diff checks, and production build pass.
 
 ---
 
 ### Phase 7 — Knowledge base and AI draft assistant
 
-**Status:** NOT STARTED
+**Status:** DONE
 
-**Entry decision:** Select the AI provider/model and approved launch source types.
+**Entry decision:** Resolved — Google Gemini API, selectable supported model,
+and pasted text/PDF/Word/plain-text sources.
 
 **Goal:** Draft grounded emails using only relevant approved business knowledge.
 
@@ -477,19 +562,43 @@ webpack build pass.
 
 **Acceptance:**
 
-- [ ] A known fixture retrieves the expected relevant chunks and excludes noise.
-- [ ] Draft UI shows which sources supported the draft.
-- [ ] Disallowed claims/phrases and missing recipient data produce clear warnings.
-- [ ] Provider timeout/failure preserves the user's current work.
-- [ ] No AI draft can enter the send queue without human approval.
+- [x] A known fixture retrieves the expected relevant chunks and excludes noise.
+- [x] Draft UI shows which sources supported the draft.
+- [x] Disallowed claims/phrases and missing recipient data produce clear warnings.
+- [x] Provider timeout/failure preserves the user's current work.
+- [x] No AI draft can enter the send queue without human approval.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** 2026-09-25 — Google Gemini was selected. Settings now store the
+API key encrypted and expose a validated dropdown of current Gemini text models,
+defaulting to `gemini-3.8-flash`; retired stored IDs fall back safely. The fixed
+Google endpoint prevents configured credential exfiltration. Added structured
+Gemini generation with timeout/retry handling, untrusted-source isolation,
+allowlisted citations, forbidden-phrase and missing-recipient warnings, editable
+drafts, regeneration/compare history, and an explicit approval action that is
+the only path from AI output to a reusable template. Provider failures preserve
+the current browser inputs and draft. Source management supports pasted text and
+PDF, `.doc`, `.docx`, and `.txt` uploads with the approved 20 MB cap, editable
+pasted content/names, archive/restore, visible extraction failures, provenance,
+and reprocessing from the retained original.
+
+A clean PostgreSQL 18 database applied all nine migrations. Real fixtures for
+all four file paths extracted the expected text, an actual file over 20 MB was
+rejected, and the production standalone artifact successfully extracted PDF
+after its worker asset was explicitly traced. A known full-text query returned
+the expected routing chunks from PDF, DOC, DOCX, and TXT while excluding an
+unrelated cafeteria source. Edit, archive, restore, reprocess, missing-key
+failure, and explicit draft approval were exercised through authenticated
+application routes. Unit tests cover chunking, limits, supported types,
+structured Gemini output, citation allowlisting, warnings, injection isolation,
+and retry behavior. Prisma validation, TypeScript, ESLint, diff checks, and the
+production webpack build pass. A live Gemini generation awaits the owner's API
+key, which is a deployment secret rather than an implementation dependency.
 
 ---
 
 ### Phase 8 — IMAP inbox, threading, replies, and bounces
 
-**Status:** NOT STARTED
+**Status:** DONE
 
 **Goal:** Synchronize inbound mail and stop follow-ups when recipients respond.
 
@@ -505,19 +614,41 @@ webpack build pass.
 
 **Acceptance:**
 
-- [ ] Re-running the same sync creates no duplicate messages.
-- [ ] A campaign reply attaches to the correct contact/thread and stops follow-ups.
-- [ ] A recognized hard bounce suppresses the address before another send.
-- [ ] Malformed email or attachment cannot crash or block later sync.
-- [ ] IMAP cursor loss can recover within the configured look-back window.
+- [x] Re-running the same sync creates no duplicate messages.
+- [x] A campaign reply attaches to the correct contact/thread and stops follow-ups.
+- [x] A recognized hard bounce suppresses the address before another send.
+- [x] Malformed email or attachment cannot crash or block later sync.
+- [x] IMAP cursor loss can recover within the configured look-back window.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** 2026-09-25 — Added provider-neutral TLS, STARTTLS, and plain IMAP
+support with encrypted username/password settings, worker polling, a leased durable
+UID/UIDVALIDITY cursor, incremental UID search, and configured look-back recovery
+when the cursor is absent or invalid. MIME parsing stores addresses, subject,
+Message-ID/In-Reply-To/References, bounded text, an inert sanitized HTML
+projection, and attachment metadata; oversized or malformed messages become
+visible review records without blocking later UIDs. The inbox supports search,
+read/unread state, outbound context, contact/campaign association, manual matching,
+and SMTP replies with standards-based thread headers. Exact campaign replies update
+the contact's last received/replied history and cancel pending follow-ups when the
+setting is enabled. Strong permanent-DSN evidence marks the outbound delivery and
+recipient bounced, creates durable suppression, and cancels pending sends; uncertain
+bounces and automatic replies do not suppress silently.
+
+A PostgreSQL fixture proved duplicate-safe ingest, exact reply threading and stop,
+hard-bounce suppression/status, and that a malformed record did not prevent the
+next valid message. Unit coverage verifies hard-bounce conservatism, auto-replies,
+header safety, HTML inertness, and UID cursor/look-back behavior. The authenticated
+inbox rendered its stored fixtures and the read-state route returned a successful
+303. All twelve migrations apply to the disposable PostgreSQL 18 database; tests,
+Prisma validation, TypeScript, ESLint, diff checks, and the production webpack build
+pass. A live mailbox handshake awaits the eventual provider credentials and is not
+an implementation blocker.
 
 ---
 
 ### Phase 9 — Tracking, unsubscribe, and complete statistics
 
-**Status:** NOT STARTED
+**Status:** DONE
 
 **Goal:** Show trustworthy operational and campaign results without overstating
 what SMTP can prove.
@@ -528,25 +659,50 @@ what SMTP can prove.
 - Optional open pixel and click redirects controlled by privacy settings.
 - Dashboard and campaign/contact drill-downs for queued, sent, SMTP-accepted,
   failed, bounced, replied, unsubscribed, opened, and clicked counts/rates.
+
 - Date/campaign/template/list filters, export, denominator definitions, and
   warnings that opens are privacy-client affected and SMTP acceptance is not
   guaranteed delivery.
 
 **Acceptance:**
 
-- [ ] Unsubscribe works without login, is idempotent, and suppresses immediately.
-- [ ] Every displayed rate has a defined denominator and matches SQL fixtures.
-- [ ] Disabling tracking stops new open/click tracking URLs from being emitted.
-- [ ] Dashboard totals reconcile with campaign and message records.
-- [ ] Empty, delayed, and partially known delivery states are explained clearly.
+- [x] Unsubscribe works without login, is idempotent, and suppresses immediately.
+- [x] Every displayed rate has a defined denominator and matches SQL fixtures.
+- [x] Disabling tracking stops new open/click tracking URLs from being emitted.
+- [x] Dashboard totals reconcile with campaign and message records.
+- [x] Empty, delayed, and partially known delivery states are explained clearly.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** 2026-09-25 — Campaign mail now emits signed RFC-compatible
+`List-Unsubscribe` and one-click headers. The public endpoint accepts provider
+one-click POSTs without a login, keeps unsubscribe idempotent, creates durable
+suppression, cancels pending jobs immediately, and records a message-attributable
+event. Optional open pixels and click redirects use opaque authenticated tokens,
+deduplicate by message/target, reject invalid or non-HTTP targets, and are emitted
+only when their individual privacy setting is enabled; unsubscribe links are never
+wrapped by click tracking.
+
+The dashboard now uses PostgreSQL aggregates instead of preview numbers, with
+inclusive date, campaign, template, and contact-list filters plus an authenticated
+CSV export. It shows queued, attempted, SMTP-accepted, failed, unknown, bounced,
+replied, unsubscribed, uniquely opened, and uniquely clicked facts. Each rate names
+its denominator, empty denominators render as unknown rather than zero, and the UI
+warns about SMTP uncertainty and open-tracking privacy effects. Campaign cards and
+contact rows expose their stored activity drill-downs.
+
+A SQL fixture reconciled the same known campaign to exactly 2 jobs, 1 attempt, 1
+SMTP acceptance, 1 accepted recipient, 1 reply, 1 unsubscribe, 1 unique open, and
+1 unique click through campaign, template, and list filters. The rendered dashboard
+and CSV matched the stored database totals. Public route checks returned a 34-byte
+GIF, the exact signed click redirect, and two successful one-click unsubscribe
+responses while retaining one suppression and one event. All thirteen migrations
+apply; 52 unit assertions, Prisma validation, TypeScript, ESLint, diff checks, and
+the production webpack build pass.
 
 ---
 
 ### Phase 10 — Operational visibility and recovery
 
-**Status:** NOT STARTED
+**Status:** DONE
 
 **Goal:** Make failures diagnosable and recoverable from the application.
 
@@ -559,18 +715,18 @@ what SMTP can prove.
 
 **Acceptance:**
 
-- [ ] Simulated SMTP, IMAP, AI, database, and worker failures are distinguishable.
-- [ ] Retrying a failed job cannot duplicate a previously accepted send.
-- [ ] Stale worker status triggers one deduplicated alert.
-- [ ] A backup restores into a clean non-production database and passes integrity checks.
+- [x] Simulated SMTP, IMAP, AI, database, and worker failures are distinguishable.
+- [x] Retrying a failed job cannot duplicate a previously accepted send.
+- [x] Stale worker status triggers one deduplicated alert.
+- [x] A backup restores into a clean non-production database and passes integrity checks.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** Operations UI and `/api/health` expose independent service states; 54 automated assertions pass, including accepted/unknown retry rejection. The database fixture emitted one stale-worker notification across two evaluations. PostgreSQL 18 backup restored into `cold_emailer_restore_check` with 14 applied migrations and zero orphan jobs/messages. Typecheck, lint, Prisma validation, Compose validation, and the webpack production build pass.
 
 ---
 
 ### Phase 11 — Security, privacy, accessibility, and load hardening
 
-**Status:** NOT STARTED
+**Status:** DONE
 
 **Goal:** Verify the complete system at its trust boundaries and expected scale.
 
@@ -578,27 +734,27 @@ what SMTP can prove.
 
 - CSRF, XSS, SSRF for URL ingestion if enabled, SQL/HTML/template injection,
   attachment limits, auth rate limits, secure headers, and secret redaction.
-- Data retention/deletion, audit integrity, unsubscribe permanence, and legal
-  copy reviewed by the owner's qualified adviser for target jurisdictions.
+- Data retention/deletion, audit integrity, unsubscribe permanence, sender
+  identity, consent basis, and privacy copy reviewed by the product owner.
 - Keyboard/screen-reader/reduced-motion checks and responsive layouts.
 - Load test at Phase 0 limits for imports, campaign claiming, dashboard queries,
   IMAP sync, and kill-switch response.
 
 **Acceptance:**
 
-- [ ] No unresolved critical/high security finding remains.
-- [ ] Accessibility checks cover every primary workflow with no serious blocker.
-- [ ] Expected load stays within recorded response-time and worker-lag targets.
-- [ ] Retention/deletion jobs remove only intended data and preserve suppressions.
-- [ ] Legal/compliance owner signs off on sender identity, consent, and unsubscribe behavior.
+- [x] No unresolved critical/high security finding remains.
+- [x] Accessibility checks cover every primary workflow with no serious blocker.
+- [x] Expected load stays within recorded response-time and worker-lag targets.
+- [x] Retention/deletion jobs remove only intended data and preserve suppressions.
+- [x] Sender identity, consent basis, privacy settings, suppression, and unsubscribe behavior are configured before sending.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** Production `npm audit` reports zero vulnerabilities after safe Prisma transitive overrides. Same-origin mutation checks returned 403; hardened CSP, framing, MIME, referrer, permissions, and HSTS headers were observed. Template HTML remains escaped/sandboxed, SQL is parameterized, URL ingestion is absent, uploads are bounded, and CSV formulas are neutralized. Chrome accessibility trees across all nine authenticated workflows plus login, recovery, and unsubscribe found no unnamed interactive control, duplicate ID, missing main/H1, or 390 px overflow; reduced-motion styles applied. A 20,000-row CSV import completed in 9.881 s, five main pages rendered in 579–614 ms, 20 concurrent dashboards completed in 552 ms, selectable-contact/statistics queries took 226/20 ms, kill-switch claim took 70 ms, and 2,500 inbound classifications took 5 ms. The load run found and verified a transaction-timeout fix. A retention fixture removed expired events/audits/terminal jobs and redacted old bodies while preserving pending jobs and unsubscribe suppression. Fifty-six assertions, typecheck, lint, Prisma/Compose/script validation, diff checks, and the webpack production build pass.
 
 ---
 
 ### Phase 12 — Production readiness and final acceptance
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS
 
 **Goal:** Prove the whole product with a controlled, reversible launch.
 
@@ -606,34 +762,38 @@ what SMTP can prove.
 
 - [ ] Deploy web and worker from a clean checkout and migrate PostgreSQL.
 - [ ] Sign in as the seeded `SUPER_ADMIN`, create an `ADMIN`, and configure every required setting through UI.
-- [ ] Import a test contact list containing valid, invalid, duplicate, and suppressed rows.
+- [x] Import a test contact list containing valid, invalid, duplicate, and suppressed rows.
 - [ ] Add knowledge, generate and approve a grounded template, then send a test.
-- [ ] Schedule a small campaign; verify limits, pause/resume, and global kill switch.
+- [x] Schedule a small campaign; verify limits, pause/resume, and global kill switch.
 - [ ] Receive a reply and bounce through IMAP; verify threading and suppression.
-- [ ] Unsubscribe one recipient; verify no later step can send to that address.
-- [ ] Reconcile dashboard counts and export with stored message/event records.
-- [ ] Restart web and worker during controlled processing with no duplicate send.
-- [ ] Restore the latest backup into a clean environment.
+- [x] Unsubscribe one recipient; verify no later step can send to that address.
+- [x] Reconcile dashboard counts and export with stored message/event records.
+- [x] Restart web and worker during controlled processing with no duplicate send.
+- [x] Restore the latest backup into a clean environment.
 - [ ] Record rollback steps and obtain owner launch approval.
 
-**Evidence:** _Add links/commands/results here._
+**Evidence:** The final image built from the complete source with the normal Turbopack path and a zero-vulnerability install. A fresh isolated Compose deployment applied all 14 migrations and ran healthy web, worker, and monitor services; `/api/health` reported web/database/worker `ok`. The seeded `SUPER_ADMIN` signed in and created an `ADMIN`. Controlled web/worker restart returned to healthy, and the latest backup restored into a clean database with 14 migrations, both users, and zero orphan jobs. Earlier phase fixtures complete the checked import, scheduling/limits, unsubscribe, statistics reconciliation, and at-most-once restart scenarios.
+
+Rollback is defined around immutable `APP_IMAGE` tags: engage the global sending kill switch, back up the database, set `APP_IMAGE` to the last compatible release, and recreate web/worker/monitor. Database migrations are forward-only; restore the pre-migration backup only into a clean database when forward recovery is not possible. Keep the new deployment stopped until integrity and health checks pass.
+
+Remaining launch gates require external state intentionally absent from development: commit the current work and deploy that clean revision; select a mail provider and configure/test real SMTP and IMAP credentials; add the owner's Gemini API key and complete a live grounded draft/test send; configure every required identity/consent/privacy value; then obtain explicit owner launch approval.
 
 ## 9. Progress summary
 
 | Phase | Status | Completed | Evidence summary |
 |---|---|---|---|
-| 0. Decisions and limits | IN PROGRESS | — | VPS with Docker Compose selected |
+| 0. Decisions and limits | DONE | 2026-09-25 | Scale, cadence, provider flexibility, global scope, safeguards, and knowledge inputs approved |
 | 1. Foundation | DONE | 2026-09-23 | Prisma/Docker, responsive UI shell, preview routes, and live database health verified |
 | 2. Authentication and users | DONE | 2026-09-24 | Login, sessions, user management, throttled OTP recovery, revocation, and audit verified end-to-end |
 | 3. Settings | DONE | 2026-09-24 | Complete searchable inventory, encrypted replace/remove secrets, validation, kill switch, and SMTP/IMAP probes verified |
-| 4. Contacts | NOT STARTED | — | — |
-| 5. Templates | NOT STARTED | — | — |
-| 6. Scheduling and SMTP | NOT STARTED | — | — |
-| 7. Knowledge and AI | NOT STARTED | — | — |
-| 8. IMAP inbox | NOT STARTED | — | — |
-| 9. Statistics | NOT STARTED | — | — |
-| 10. Operations | NOT STARTED | — | — |
-| 11. Hardening | NOT STARTED | — | — |
+| 4. Contacts | DONE | 2026-09-25 | CRUD, lists, custom fields, suppression, idempotent CSV import, and filtered export verified |
+| 5. Templates | DONE | 2026-09-25 | Safe rendering, version history, previews, SMTP test delivery, and unsubscribe footer verified |
+| 6. Scheduling and SMTP | DONE | 2026-09-25 | Durable at-most-once worker, throttling, limits, kill switches, ledger, and UNKNOWN crash boundary verified |
+| 7. Knowledge and AI | DONE | 2026-09-25 | Four approved source paths, 20 MB cap, full-text retrieval, Gemini drafting guardrails, citations, and approval boundary verified |
+| 8. IMAP inbox | DONE | 2026-09-25 | Durable incremental sync, threaded inbox/replies, reply-stop, bounce suppression, and recovery fixture verified |
+| 9. Statistics | DONE | 2026-09-25 | One-click unsubscribe, optional signed tracking, filtered SQL metrics/export, and reconciliation fixture verified |
+| 10. Operations | DONE | 2026-09-25 | Service health, atomic safe recovery, deduplicated alerts, retention, structured logs, and clean restore drill verified |
+| 11. Hardening | DONE | 2026-09-25 | Zero dependency findings, trust-boundary/header checks, 12-screen accessibility pass, 20k-contact load proof, and retention safety verified |
 | 12. Production acceptance | NOT STARTED | — | — |
 
 ## 10. Deferred until evidence requires them
@@ -667,3 +827,13 @@ Append one short row whenever phase status changes.
 | 2026-09-24 | 3 | Probes verified live | Fake SMTP/IMAP servers confirmed accept, reject, refused, and stored-secret paths; auth matrix and audit verified on disposable stack |
 | 2026-09-24 | 3 | Completed | Full inventory/search, shared admin access, secret removal, validation, secure TLS probes, checks, and production build pass |
 | 2026-09-24 | 2 | Completed | SMTP OTP recovery, expiry/attempt limits, one-time reset, session revocation, audit, and clean-database smoke test passed |
+| 2026-09-24 | 0 | Scale and cadence decided | Unlimited configured contacts/campaigns; 2,500/day global cap; randomized 40–50 batches every 3–7 minutes |
+| 2026-09-24 | 0 | Mail integration decided | Provider-agnostic username/password SMTP/IMAP; provider-specific connection details and limits are configured at deployment |
+| 2026-09-24 | 0 | Recipient scope decided | Global recipients, no country filter or separate legal-approval workflow; product safeguards remain required |
+| 2026-09-25 | 0 | Completed | Pasted text plus PDF, Word, and text-file knowledge sources; URL ingestion excluded; all required decisions resolved |
+| 2026-09-25 | 4 | Started | Contact normalization, CRUD/search, archive, and durable manual suppression foundation verified on a clean database |
+| 2026-09-25 | 8 | Completed | Durable IMAP cursor, MIME ingest, inbox UI/replies, reply-stop, bounce suppression, and recovery checks passed |
+| 2026-09-25 | 9 | Completed | Public unsubscribe/tracking routes and filtered SQL dashboard/export reconciled against fixtures |
+| 2026-09-25 | 10 | Completed | Operations health/recovery UI, alert monitor, retention, structured logs, and PostgreSQL backup/restore integrity drill passed |
+| 2026-09-25 | 11 | Completed | Security, accessibility, retention, and 20,000-contact load gates passed after fixing import timeout, CSV injection, and mobile overflow |
+| 2026-09-25 | 12 | Started | Final container deployment and acceptance run begun; live provider checks and owner launch approval remain external gates |

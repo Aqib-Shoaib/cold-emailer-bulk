@@ -12,22 +12,139 @@ enum UserRole {
   ADMIN
 }
 
+enum SuppressionReason {
+  MANUAL
+  UNSUBSCRIBED
+  BOUNCED
+  COMPLAINED
+}
+
+enum CampaignStatus {
+  DRAFT
+  REVIEW
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELED
+}
+
+enum CampaignRecipientStatus {
+  PENDING
+  SENT
+  BOUNCED
+  UNKNOWN
+  FAILED
+  SKIPPED
+  CANCELED
+}
+
+enum JobStatus {
+  PENDING
+  LEASED
+  DELIVERING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum EmailDeliveryStatus {
+  DELIVERING
+  SMTP_ACCEPTED
+  BOUNCED
+  UNKNOWN
+  FAILED
+  SKIPPED
+}
+
+enum KnowledgeSourceType {
+  PASTED_TEXT
+  PDF
+  WORD
+  TEXT_FILE
+}
+
+enum KnowledgeExtractionStatus {
+  READY
+  FAILED
+}
+
+enum InboundMessageKind {
+  REPLY
+  HARD_BOUNCE
+  AUTO_REPLY
+  UNMATCHED
+  REVIEW
+}
+
+enum TrackingEventType {
+  OPENED
+  CLICKED
+  UNSUBSCRIBED
+}
+
+enum ServiceState {
+  OK
+  ERROR
+  UNCONFIGURED
+  UNCHECKED
+}
+
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
-  name         String    @db.VarChar(120)
-  email        String    @unique @db.VarChar(320)
-  passwordHash String    @map("password_hash")
-  role         UserRole  @default(ADMIN)
-  active       Boolean   @default(true)
-  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(3)
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  sessions     Session[]
-  auditEvents  AuditEvent[]
-  settingsUpdates AppSettings[]
-  passwordReset PasswordReset?
+  id               String            @id @default(uuid()) @db.Uuid
+  name             String            @db.VarChar(120)
+  email            String            @unique @db.VarChar(320)
+  passwordHash     String            @map("password_hash")
+  role             UserRole          @default(ADMIN)
+  active           Boolean           @default(true)
+  lastLoginAt      DateTime?         @map("last_login_at") @db.Timestamptz(3)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessions         Session[]
+  auditEvents      AuditEvent[]
+  settingsUpdates  AppSettings[]
+  passwordReset    PasswordReset?
+  contactImports   ContactImport[]
+  templateVersions TemplateVersion[]
+  campaigns        Campaign[]
+  knowledgeSources KnowledgeSource[]
+  inboxReplies     InboxReply[]
 
   @@map("users")
+}
+
+model KnowledgeSource {
+  id               String                    @id @default(uuid()) @db.Uuid
+  name             String                    @db.VarChar(160)
+  type             KnowledgeSourceType
+  fileName         String                    @default("") @map("file_name") @db.VarChar(255)
+  mimeType         String                    @default("") @map("mime_type") @db.VarChar(120)
+  originalContent  Bytes?                    @map("original_content")
+  extractedText    String                    @map("extracted_text") @db.Text
+  extractionStatus KnowledgeExtractionStatus @default(READY) @map("extraction_status")
+  extractionError  String                    @default("") @map("extraction_error") @db.VarChar(500)
+  processedAt      DateTime?                 @map("processed_at") @db.Timestamptz(3)
+  archivedAt       DateTime?                 @map("archived_at") @db.Timestamptz(3)
+  createdByUserId  String?                   @map("created_by_user_id") @db.Uuid
+  createdAt        DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy        User?                     @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  chunks           KnowledgeChunk[]
+
+  @@index([archivedAt, extractionStatus])
+  @@map("knowledge_sources")
+}
+
+model KnowledgeChunk {
+  id        String          @id @default(uuid()) @db.Uuid
+  sourceId  String          @map("source_id") @db.Uuid
+  ordinal   Int
+  content   String          @db.Text
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  source    KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, ordinal])
+  @@map("knowledge_chunks")
 }
 
 model PasswordReset {
@@ -91,4 +208,381 @@ model AuditEvent {
 
   @@index([createdAt])
   @@map("audit_events")
+}
+
+model Contact {
+  id                  String              @id @default(uuid()) @db.Uuid
+  email               String              @unique @db.VarChar(320)
+  firstName           String              @default("") @map("first_name") @db.VarChar(120)
+  lastName            String              @default("") @map("last_name") @db.VarChar(120)
+  company             String              @default("") @db.VarChar(160)
+  title               String              @default("") @db.VarChar(160)
+  tags                String[]            @default([])
+  customFields        Json                @default("{}") @map("custom_fields")
+  archivedAt          DateTime?           @map("archived_at") @db.Timestamptz(3)
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  memberships         ContactListMember[]
+  campaignRecipients  CampaignRecipient[]
+  emailMessages       EmailMessage[]
+  inboundMessages     InboundMessage[]
+  inboxReplies        InboxReply[]
+  trackingEvents      TrackingEvent[]
+  lastEmailAcceptedAt DateTime?           @map("last_email_accepted_at") @db.Timestamptz(3)
+  lastEmailSubject    String              @default("") @map("last_email_subject") @db.VarChar(300)
+  lastEmailReceivedAt DateTime?           @map("last_email_received_at") @db.Timestamptz(3)
+  lastReceivedSubject String              @default("") @map("last_received_subject") @db.VarChar(500)
+  lastRepliedAt       DateTime?           @map("last_replied_at") @db.Timestamptz(3)
+
+  @@index([archivedAt])
+  @@map("contacts")
+}
+
+model ContactList {
+  id          String              @id @default(uuid()) @db.Uuid
+  name        String              @unique @db.VarChar(160)
+  description String              @default("") @db.VarChar(500)
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  memberships ContactListMember[]
+  campaigns   Campaign[]
+
+  @@map("contact_lists")
+}
+
+model ContactListMember {
+  listId    String      @map("list_id") @db.Uuid
+  contactId String      @map("contact_id") @db.Uuid
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  list      ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contact   Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([listId, contactId])
+  @@index([contactId])
+  @@map("contact_list_members")
+}
+
+model ContactImport {
+  id              String   @id @default(uuid()) @db.Uuid
+  fileName        String   @map("file_name") @db.VarChar(255)
+  totalRows       Int      @map("total_rows")
+  importedCount   Int      @map("imported_count")
+  duplicateCount  Int      @map("duplicate_count")
+  invalidCount    Int      @map("invalid_count")
+  errors          Json     @default("[]")
+  createdByUserId String?  @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy       User?    @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@map("contact_imports")
+}
+
+model Template {
+  id             String            @id @default(uuid()) @db.Uuid
+  name           String            @db.VarChar(160)
+  subject        String            @db.VarChar(300)
+  textBody       String            @map("text_body") @db.Text
+  htmlBody       String            @map("html_body") @db.Text
+  currentVersion Int               @default(1) @map("current_version")
+  archivedAt     DateTime?         @map("archived_at") @db.Timestamptz(3)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  versions       TemplateVersion[]
+  campaignSteps  CampaignStep[]
+  emailMessages  EmailMessage[]
+
+  @@index([archivedAt])
+  @@map("templates")
+}
+
+model Campaign {
+  id              String              @id @default(uuid()) @db.Uuid
+  name            String              @db.VarChar(160)
+  status          CampaignStatus      @default(DRAFT)
+  contactListId   String?             @map("contact_list_id") @db.Uuid
+  createdByUserId String?             @map("created_by_user_id") @db.Uuid
+  timezone        String              @db.VarChar(64)
+  dailyCap        Int                 @map("daily_cap")
+  audienceCount   Int                 @default(0) @map("audience_count")
+  excludedCount   Int                 @default(0) @map("excluded_count")
+  reviewErrors    Json                @default("[]") @map("review_errors")
+  reviewedAt      DateTime?           @map("reviewed_at") @db.Timestamptz(3)
+  scheduledAt     DateTime?           @map("scheduled_at") @db.Timestamptz(3)
+  pausedAt        DateTime?           @map("paused_at") @db.Timestamptz(3)
+  canceledAt      DateTime?           @map("canceled_at") @db.Timestamptz(3)
+  completedAt     DateTime?           @map("completed_at") @db.Timestamptz(3)
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  contactList     ContactList?        @relation(fields: [contactListId], references: [id], onDelete: SetNull)
+  createdBy       User?               @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  steps           CampaignStep[]
+  recipients      CampaignRecipient[]
+  jobs            Job[]
+  emailMessages   EmailMessage[]
+  inboundMessages InboundMessage[]
+  inboxReplies    InboxReply[]
+  trackingEvents  TrackingEvent[]
+
+  @@index([status, scheduledAt])
+  @@map("campaigns")
+}
+
+model CampaignStep {
+  id            String         @id @default(uuid()) @db.Uuid
+  campaignId    String         @map("campaign_id") @db.Uuid
+  templateId    String         @map("template_id") @db.Uuid
+  position      Int
+  delayMinutes  Int            @default(0) @map("delay_minutes")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  campaign      Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  template      Template       @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  jobs          Job[]
+  emailMessages EmailMessage[]
+
+  @@unique([campaignId, position])
+  @@map("campaign_steps")
+}
+
+model CampaignRecipient {
+  id            String                  @id @default(uuid()) @db.Uuid
+  campaignId    String                  @map("campaign_id") @db.Uuid
+  contactId     String?                 @map("contact_id") @db.Uuid
+  email         String                  @db.VarChar(320)
+  dataSnapshot  Json                    @map("data_snapshot")
+  status        CampaignRecipientStatus @default(PENDING)
+  sentCount     Int                     @default(0) @map("sent_count")
+  lastEmailAt   DateTime?               @map("last_email_at") @db.Timestamptz(3)
+  lastError     String                  @default("") @map("last_error") @db.VarChar(500)
+  createdAt     DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  campaign      Campaign                @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact       Contact?                @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  jobs          Job[]
+  emailMessages EmailMessage[]
+
+  @@unique([campaignId, email])
+  @@index([email])
+  @@map("campaign_recipients")
+}
+
+model Job {
+  id             String            @id @default(uuid()) @db.Uuid
+  campaignId     String            @map("campaign_id") @db.Uuid
+  recipientId    String            @map("recipient_id") @db.Uuid
+  stepId         String            @map("step_id") @db.Uuid
+  status         JobStatus         @default(PENDING)
+  runAt          DateTime          @map("run_at") @db.Timestamptz(3)
+  attempt        Int               @default(0)
+  maxAttempts    Int               @map("max_attempts")
+  lockedAt       DateTime?         @map("locked_at") @db.Timestamptz(3)
+  lockedBy       String            @default("") @map("locked_by") @db.VarChar(120)
+  completedAt    DateTime?         @map("completed_at") @db.Timestamptz(3)
+  lastError      String            @default("") @map("last_error") @db.VarChar(500)
+  idempotencyKey String            @unique @map("idempotency_key") @db.VarChar(200)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  campaign       Campaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  recipient      CampaignRecipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  step           CampaignStep      @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  emailMessage   EmailMessage?
+
+  @@index([status, runAt])
+  @@index([campaignId, status])
+  @@map("jobs")
+}
+
+model EmailMessage {
+  id              String              @id @default(uuid()) @db.Uuid
+  jobId           String?             @unique @map("job_id") @db.Uuid
+  campaignId      String              @map("campaign_id") @db.Uuid
+  recipientId     String              @map("recipient_id") @db.Uuid
+  stepId          String              @map("step_id") @db.Uuid
+  templateId      String              @map("template_id") @db.Uuid
+  contactId       String?             @map("contact_id") @db.Uuid
+  messageId       String              @unique @map("message_id") @db.VarChar(255)
+  toEmail         String              @map("to_email") @db.VarChar(320)
+  subject         String              @db.VarChar(300)
+  textBody        String              @map("text_body") @db.Text
+  htmlBody        String              @map("html_body") @db.Text
+  status          EmailDeliveryStatus @default(DELIVERING)
+  smtpAcceptedAt  DateTime?           @map("smtp_accepted_at") @db.Timestamptz(3)
+  lastError       String              @default("") @map("last_error") @db.VarChar(500)
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  job             Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  campaign        Campaign            @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  recipient       CampaignRecipient   @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  step            CampaignStep        @relation(fields: [stepId], references: [id], onDelete: Restrict)
+  template        Template            @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  contact         Contact?            @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  inboundMessages InboundMessage[]
+  trackingEvents  TrackingEvent[]
+
+  @@index([toEmail, smtpAcceptedAt])
+  @@index([campaignId, status])
+  @@map("email_messages")
+}
+
+model TrackingEvent {
+  id             String            @id @default(uuid()) @db.Uuid
+  type           TrackingEventType
+  emailMessageId String            @map("email_message_id") @db.Uuid
+  campaignId     String            @map("campaign_id") @db.Uuid
+  contactId      String?           @map("contact_id") @db.Uuid
+  targetHash     String            @default("") @map("target_hash") @db.Char(64)
+  targetUrl      String            @default("") @map("target_url") @db.Text
+  occurredAt     DateTime          @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  emailMessage   EmailMessage      @relation(fields: [emailMessageId], references: [id], onDelete: Cascade)
+  campaign       Campaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact        Contact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@unique([emailMessageId, type, targetHash])
+  @@index([campaignId, type, occurredAt])
+  @@index([contactId, occurredAt])
+  @@map("tracking_events")
+}
+
+model ServiceStatus {
+  id        String       @id @db.VarChar(20)
+  state     ServiceState @default(UNCHECKED)
+  message   String       @default("") @db.VarChar(500)
+  checkedAt DateTime?    @map("checked_at") @db.Timestamptz(3)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("service_statuses")
+}
+
+model OperationalAlert {
+  id             String    @id @db.VarChar(160)
+  kind           String    @db.VarChar(40)
+  detail         String    @default("") @db.VarChar(500)
+  active         Boolean   @default(true)
+  openedAt       DateTime  @default(now()) @map("opened_at") @db.Timestamptz(3)
+  lastNotifiedAt DateTime? @map("last_notified_at") @db.Timestamptz(3)
+  resolvedAt     DateTime? @map("resolved_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([active, updatedAt])
+  @@map("operational_alerts")
+}
+
+model ImapSyncState {
+  id            String    @id @db.Char(64)
+  host          String    @db.VarChar(255)
+  username      String    @db.VarChar(320)
+  folder        String    @db.VarChar(100)
+  uidValidity   String    @default("") @map("uid_validity") @db.VarChar(30)
+  lastUid       Int       @default(0) @map("last_uid")
+  syncStartedAt DateTime? @map("sync_started_at") @db.Timestamptz(3)
+  lastSyncedAt  DateTime? @map("last_synced_at") @db.Timestamptz(3)
+  lastError     String    @default("") @map("last_error") @db.VarChar(500)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("imap_sync_states")
+}
+
+model InboundMessage {
+  id                String             @id @default(uuid()) @db.Uuid
+  folder            String             @db.VarChar(100)
+  uidValidity       String             @map("uid_validity") @db.VarChar(30)
+  uid               Int
+  messageId         String             @default("") @map("message_id") @db.VarChar(500)
+  inReplyTo         String             @default("") @map("in_reply_to") @db.VarChar(500)
+  references        String[]           @default([])
+  fromName          String             @default("") @map("from_name") @db.VarChar(320)
+  fromEmail         String             @default("") @map("from_email") @db.VarChar(320)
+  toEmails          String[]           @default([]) @map("to_emails")
+  subject           String             @default("") @db.VarChar(500)
+  textBody          String             @default("") @map("text_body") @db.Text
+  htmlBody          String             @default("") @map("html_body") @db.Text
+  attachments       Json               @default("[]")
+  receivedAt        DateTime           @map("received_at") @db.Timestamptz(3)
+  readAt            DateTime?          @map("read_at") @db.Timestamptz(3)
+  kind              InboundMessageKind @default(UNMATCHED)
+  reviewReason      String             @default("") @map("review_reason") @db.VarChar(500)
+  parseError        String             @default("") @map("parse_error") @db.VarChar(500)
+  contactId         String?            @map("contact_id") @db.Uuid
+  campaignId        String?            @map("campaign_id") @db.Uuid
+  outboundMessageId String?            @map("outbound_message_id") @db.Uuid
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  contact           Contact?           @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  campaign          Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  outboundMessage   EmailMessage?      @relation(fields: [outboundMessageId], references: [id], onDelete: SetNull)
+  replies           InboxReply[]
+
+  @@unique([folder, uidValidity, uid])
+  @@index([messageId])
+  @@index([contactId, receivedAt])
+  @@index([campaignId, receivedAt])
+  @@index([readAt, receivedAt])
+  @@map("inbound_messages")
+}
+
+model InboxReply {
+  id               String              @id @default(uuid()) @db.Uuid
+  inboundMessageId String              @map("inbound_message_id") @db.Uuid
+  contactId        String?             @map("contact_id") @db.Uuid
+  campaignId       String?             @map("campaign_id") @db.Uuid
+  sentByUserId     String?             @map("sent_by_user_id") @db.Uuid
+  messageId        String              @unique @map("message_id") @db.VarChar(255)
+  toEmail          String              @map("to_email") @db.VarChar(320)
+  subject          String              @db.VarChar(500)
+  textBody         String              @map("text_body") @db.Text
+  status           EmailDeliveryStatus @default(DELIVERING)
+  smtpAcceptedAt   DateTime?           @map("smtp_accepted_at") @db.Timestamptz(3)
+  lastError        String              @default("") @map("last_error") @db.VarChar(500)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  inboundMessage   InboundMessage      @relation(fields: [inboundMessageId], references: [id], onDelete: Cascade)
+  contact          Contact?            @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  campaign         Campaign?           @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  sentBy           User?               @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
+
+  @@index([inboundMessageId, createdAt])
+  @@map("inbox_replies")
+}
+
+model WorkerHeartbeat {
+  workerId     String   @id @map("worker_id") @db.VarChar(120)
+  startedAt    DateTime @default(now()) @map("started_at") @db.Timestamptz(3)
+  lastSeenAt   DateTime @map("last_seen_at") @db.Timestamptz(3)
+  currentJobId String?  @map("current_job_id") @db.Uuid
+
+  @@map("worker_heartbeats")
+}
+
+model ThrottleState {
+  id             String   @id @default("global") @db.VarChar(20)
+  nextBatchAt    DateTime @default(now()) @map("next_batch_at") @db.Timestamptz(3)
+  batchRemaining Int      @default(0) @map("batch_remaining")
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("throttle_state")
+}
+
+model TemplateVersion {
+  id              String   @id @default(uuid()) @db.Uuid
+  templateId      String   @map("template_id") @db.Uuid
+  version         Int
+  subject         String   @db.VarChar(300)
+  textBody        String   @map("text_body") @db.Text
+  htmlBody        String   @map("html_body") @db.Text
+  createdByUserId String?  @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  template        Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  createdBy       User?    @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([templateId, version])
+  @@map("template_versions")
+}
+
+model Suppression {
+  email     String            @id @db.VarChar(320)
+  reason    SuppressionReason
+  detail    String            @default("") @db.VarChar(300)
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("suppressions")
 }

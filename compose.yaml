@@ -18,7 +18,7 @@ services:
 
   migrate:
     build: .
-    image: cold-emailer-app
+    image: ${APP_IMAGE:-cold-emailer-app}
     command: npm run db:deploy
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
@@ -28,7 +28,7 @@ services:
     restart: "no"
 
   web:
-    image: cold-emailer-app
+    image: ${APP_IMAGE:-cold-emailer-app}
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
@@ -46,8 +46,31 @@ services:
     ports:
       - "${APP_PORT:-3000}:3000"
 
+  worker:
+    image: ${APP_IMAGE:-cold-emailer-app}
+    command: npm run worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?Set SETTINGS_ENCRYPTION_KEY}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  monitor:
+    image: ${APP_IMAGE:-cold-emailer-app}
+    command: npm run monitor
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?Set SETTINGS_ENCRYPTION_KEY}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   seed:
-    image: cold-emailer-app
+    image: ${APP_IMAGE:-cold-emailer-app}
     profiles: [tools]
     command: npm run db:seed
     environment:

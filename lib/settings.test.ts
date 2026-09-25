@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { decryptSecret, encryptSecret } from "./crypto.ts";
 import { SETTING_FIELDS, SETTING_SECTIONS, SENDING_PAUSED_FIELD, SENDING_PAUSED_REASON_FIELD } from "./settings-schema.ts";
-import { computeSettingsUpdate, settingsDefaults, toPublicSettings, validateSettingsInput } from "./settings.ts";
+import { computeSettingsUpdate, sendingReadinessErrors, settingsDefaults, toPublicSettings, validateSettingsInput } from "./settings.ts";
 
 const KEY = "unit-test-encryption-key";
 
@@ -67,6 +67,20 @@ test("valid IANA timezones are accepted", () => {
   assert.deepEqual(validateSettingsInput(input({ timezone: "UTC" })), []);
 });
 
+test("only currently configured Gemini models are accepted", () => {
+  assert.deepEqual(validateSettingsInput(input({ aiModel: "gemini-3.8-flash" })), []);
+  assert.ok(validateSettingsInput(input({ aiModel: "gemini-2.0-flash" })).some((error) => error.field === "aiModel"));
+});
+
+test("retired stored model IDs fall back to the current default", () => {
+  const publicSettings = toPublicSettings(
+    { values: { aiModel: "gemini-2.0-flash" }, sendingPaused: true, sendingPausedReason: "Setup", updatedAt: new Date() },
+    {},
+    KEY,
+  );
+  assert.equal(publicSettings.values.aiModel, "gemini-3.8-flash");
+});
+
 test("paused kill switch requires a non-empty reason", () => {
   const paused = validateSettingsInput(input({ sendingPaused: "Paused", sendingPausedReason: "  " }));
   assert.ok(paused.some((e) => e.field === SENDING_PAUSED_REASON_FIELD));
@@ -108,6 +122,20 @@ test("structured locale, quiet hours, quiet days, and deployed origin are valida
   assert.deepEqual(new Set(errors.map((error) => error.field)), new Set(["locale", "smtpQuietHours", "smtpQuietDays", "publicBaseUrl"]));
 });
 
+test("send-cycle minimums cannot exceed their maximums", () => {
+  const errors = validateSettingsInput(input({
+    smtpBatchMinSize: "51",
+    smtpBatchMaxSize: "50",
+    smtpBatchIntervalMinMinutes: "8",
+    smtpBatchIntervalMaxMinutes: "7",
+  }));
+
+  assert.deepEqual(
+    new Set(errors.map((error) => error.field)),
+    new Set(["smtpBatchMaxSize", "smtpBatchIntervalMaxMinutes"]),
+  );
+});
+
 test("switching the kill switch off records the choice without a reason", () => {
   const update = computeSettingsUpdate(input({ sendingPaused: "Sending allowed" }), { encryptionKey: KEY });
   assert.equal(update.sendingPaused, false);
@@ -145,4 +173,13 @@ test("paused reason survives a full compute and public round trip", () => {
   assert.equal(publicSettings.sendingPausedReason, "Provider incident");
   assert.equal(publicSettings.values[SENDING_PAUSED_FIELD], "Paused");
   assert.equal(publicSettings.values[SENDING_PAUSED_REASON_FIELD], "Provider incident");
+});
+
+test("sending readiness requires identity, consent, SMTP credentials, and tracking notice", () => {
+  const values = settingsDefaults();
+  assert(sendingReadinessErrors(values, false).includes("recipient source / consent basis"));
+  Object.assign(values, { physicalAddress: "1 Main St", recipientConsentBasis: "Existing business contacts", publicBaseUrl: "https://mail.example", smtpHost: "smtp.example", smtpUsername: "user", smtpFromAddress: "sender@example.com" });
+  assert.deepEqual(sendingReadinessErrors(values, true), []);
+  values.openTrackingEnabled = "Enabled";
+  assert.deepEqual(sendingReadinessErrors(values, true), ["privacy notice for enabled tracking"]);
 });

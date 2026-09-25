@@ -10,7 +10,8 @@ import {
 } from "@/lib/settings";
 import type { InputJsonValue } from "@prisma/client/runtime/client";
 import { SECRET_SETTING_FIELDS, SETTING_FIELDS, SETTING_SECTIONS } from "@/lib/settings-schema";
-import { LineReader, plainConnection, probeSmtp, secureConnection } from "@/lib/smtp";
+import { probeImap } from "@/lib/imap";
+import { probeSmtp } from "@/lib/smtp";
 
 function back(request: NextRequest, query: string) {
   return NextResponse.redirect(new URL(`/settings?${query}`, requestOrigin(request)), 303);
@@ -166,7 +167,13 @@ export async function POST(
   const result =
     sectionId === "smtp"
       ? await probeSmtp({ ...probe, password })
-      : await probeImap(probe, password);
+      : await probeImap({ ...probe, password });
+
+  await prisma.serviceStatus.upsert({
+    where: { id: sectionId },
+    create: { id: sectionId, state: result.ok ? "OK" : "ERROR", message: result.message.slice(0, 500), checkedAt: new Date() },
+    update: { state: result.ok ? "OK" : "ERROR", message: result.message.slice(0, 500), checkedAt: new Date() },
+  });
 
   await prisma.auditEvent.create({
     data: {
@@ -192,55 +199,6 @@ async function resolveSecret(
   const stored = sectionId === "smtp" ? row.smtpPasswordEnc : row.imapPasswordEnc;
   if (!stored) return null;
   return decryptSecret(encryptionKey, stored);
-}
-
-interface ProbeTarget {
-  host: string;
-  port: number;
-  tlsMode: string;
-  username: string;
-  timeoutMs: number;
-  heloName: string;
-}
-
-async function probeImap(target: ProbeTarget, password: string) {
-  if (!target.host || !target.port || Number.isNaN(target.port)) {
-    return { ok: false, message: "IMAP host and port are required." };
-  }
-  const useTls = target.tlsMode === "TLS";
-  try {
-    return await probeImapConnection(target, password, useTls);
-  } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : "The IMAP connection failed." };
-  }
-}
-
-async function probeImapConnection(target: ProbeTarget, password: string, useTls: boolean) {
-  const socket = useTls
-    ? await secureConnection(target.host, target.port, target.timeoutMs)
-    : await plainConnection(target.host, target.port, target.timeoutMs);
-  const reader = new LineReader(socket);
-  try {
-    const greeting = await reader.readLine(target.timeoutMs);
-    if (!/^\* (OK|PREAUTH)/.test(greeting)) {
-      return { ok: false, message: `The server did not answer with an IMAP greeting (${greeting.slice(0, 120)}).` };
-    }
-    const loginTag = "a1";
-    const command = `${loginTag} LOGIN "${target.username.replace(/"/g, "")}" "${password.replace(/"/g, "")}"`;
-    socket.write(`${command}\r\n`);
-    let response = "";
-    for (;;) {
-      response = await reader.readLine(target.timeoutMs);
-      if (response.startsWith(`${loginTag} `)) break;
-    }
-    if (!response.startsWith(`${loginTag} OK`)) {
-      return { ok: false, message: "The IMAP server rejected the username or password." };
-    }
-    socket.write("a2 LOGOUT\r\n", () => undefined);
-    return { ok: true, message: "" };
-  } finally {
-    socket.destroy();
-  }
 }
 
 export const dynamic = "force-dynamic";

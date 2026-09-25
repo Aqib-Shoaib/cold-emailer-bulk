@@ -29,7 +29,10 @@ function encoded(stored: string) {
   const iv = Buffer.from(parts[0], "base64url");
   const authTag = Buffer.from(parts[1], "base64url");
   const data = Buffer.from(parts[2], "base64url");
-  if (iv.length !== IV_LENGTH || authTag.length !== AUTH_TAG_LENGTH) return null;
+  if (
+    iv.length !== IV_LENGTH || authTag.length !== AUTH_TAG_LENGTH ||
+    iv.toString("base64url") !== parts[0] || authTag.toString("base64url") !== parts[1] || data.toString("base64url") !== parts[2]
+  ) return null;
 
   return { iv, authTag, data };
 }

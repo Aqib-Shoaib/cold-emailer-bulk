@@ -6,6 +6,8 @@
     "dev": "next dev -p 3011",
     "build": "next build",
     "start": "next start",
+    "worker": "node --experimental-strip-types worker.mts",
+    "monitor": "node --experimental-strip-types monitor.mts",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "node --test lib/*.test.ts app/api/health/*.test.ts app/api/settings/*.test.ts",
@@ -20,13 +22,18 @@
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
     "@tailwindcss/vite": "^4.3.3",
+    "imapflow": "^2.0.6",
+    "mailparser": "^3.9.28",
     "next": "16.3.6",
+    "pdf-parse": "^2.4.5",
     "pg": "8.23.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "word-extractor": "^1.0.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/mailparser": "^3.4.6",
     "@types/node": "^20",
     "@types/pg": "8.23.1",
     "@types/react": "^19",
@@ -36,5 +43,9 @@
     "prisma": "7.10.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^5"
+  },
+  "overrides": {
+    "deepmerge-ts": "8.0.2",
+    "mysql2": "3.24.4"
   }
 }

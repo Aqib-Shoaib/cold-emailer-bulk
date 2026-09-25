@@ -1,4 +1,5 @@
 import { connect, type Socket } from "node:net";
+import { createHash } from "node:crypto";
 import tls from "node:tls";
 
 export interface SmtpTarget {
@@ -9,6 +10,15 @@ export interface SmtpTarget {
   password: string;
   timeoutMs: number;
   heloName: string;
+}
+
+export class SmtpDeliveryError extends Error {
+  readonly deliveryUncertain: boolean;
+
+  constructor(message: string, deliveryUncertain: boolean) {
+    super(message);
+    this.deliveryUncertain = deliveryUncertain;
+  }
 }
 
 export function plainConnection(host: string, port: number, timeoutMs: number) {
@@ -61,7 +71,7 @@ export class LineReader {
       this.wake?.();
     });
     socket.once("close", () => {
-      this.error ??= new Error("The connection closed during the handshake");
+      this.error ??= new Error("The connection closed while waiting for an SMTP reply");
       this.wake?.();
     });
   }
@@ -71,7 +81,7 @@ export class LineReader {
     while (this.lines.length === 0) {
       if (this.error) throw this.error;
       const wait = deadline - Date.now();
-      if (wait <= 0) throw new Error("The server stopped responding during the handshake");
+      if (wait <= 0) throw new Error("Timed out waiting for an SMTP reply");
       await new Promise<void>((resolveWake) => {
         this.wake = resolveWake;
         setTimeout(resolveWake, Math.min(wait, 250));
@@ -194,36 +204,74 @@ function safeAddress(value: string) {
   return address;
 }
 
-export function formatSmtpMessage(message: { from: string; to: string; subject: string; text: string }) {
+export interface SmtpMessage {
+  from: string;
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+  messageId?: string;
+  replyTo?: string;
+  inReplyTo?: string;
+  references?: string[];
+  listUnsubscribe?: string;
+}
+
+export function formatSmtpMessage(message: SmtpMessage) {
   const from = safeAddress(message.from);
   const to = safeAddress(message.to);
   const subject = Buffer.from(safeHeader(message.subject), "utf8").toString("base64");
-  const body = message.text.replace(/\r\n|\r|\n/g, "\r\n").replace(/^\./gm, "..");
-  return [
+  const headers = [
     `From: <${from}>`,
     `To: <${to}>`,
     `Subject: =?UTF-8?B?${subject}?=`,
+    ...(message.replyTo ? [`Reply-To: <${safeAddress(message.replyTo)}>`] : []),
+    ...(message.messageId ? [`Message-ID: ${safeHeader(message.messageId)}`] : []),
+    ...(message.inReplyTo ? [`In-Reply-To: ${safeHeader(message.inReplyTo)}`] : []),
+    ...(message.references?.length ? [`References: ${message.references.map(safeHeader).join(" ")}`] : []),
+    ...(message.listUnsubscribe ? [`List-Unsubscribe: <${safeHeader(message.listUnsubscribe)}>`, "List-Unsubscribe-Post: List-Unsubscribe=One-Click"] : []),
     "MIME-Version: 1.0",
+  ];
+  if (!message.html) {
+    const body = message.text.replace(/\r\n|\r|\n/g, "\r\n").replace(/^\./gm, "..");
+    return [...headers, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit", "", body, "."].join("\r\n");
+  }
+
+  const boundary = `cold-emailer-${createHash("sha256").update(message.text).update(message.html).digest("hex").slice(0, 24)}`;
+  const body = [
+    `--${boundary}`,
     "Content-Type: text/plain; charset=utf-8",
     "Content-Transfer-Encoding: 8bit",
     "",
-    body,
-    ".",
-  ].join("\r\n");
+    message.text,
+    `--${boundary}`,
+    "Content-Type: text/html; charset=utf-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    message.html,
+    `--${boundary}--`,
+  ].join("\r\n").replace(/\r\n|\r|\n/g, "\r\n").replace(/^\./gm, "..");
+  return [...headers, `Content-Type: multipart/alternative; boundary="${boundary}"`, "", body, "."].join("\r\n");
 }
 
 export async function sendSmtpEmail(
   target: SmtpTarget,
-  message: { from: string; to: string; subject: string; text: string },
+  message: SmtpMessage,
 ) {
   const from = safeAddress(message.from);
   const to = safeAddress(message.to);
 
-  await session(target, async (reader, socket) => {
-    await command(reader, socket, `MAIL FROM:<${from}>`, target.timeoutMs, (code) => code.startsWith("2"));
-    await command(reader, socket, `RCPT TO:<${to}>`, target.timeoutMs, (code) => code.startsWith("2"));
-    await command(reader, socket, "DATA", target.timeoutMs, (code) => code === "354");
-    await command(reader, socket, formatSmtpMessage(message), target.timeoutMs, (code) => code.startsWith("2"));
-    socket.write("QUIT\r\n", () => undefined);
-  });
+  let deliveryStarted = false;
+  try {
+    await session(target, async (reader, socket) => {
+      await command(reader, socket, `MAIL FROM:<${from}>`, target.timeoutMs, (code) => code.startsWith("2"));
+      await command(reader, socket, `RCPT TO:<${to}>`, target.timeoutMs, (code) => code.startsWith("2"));
+      await command(reader, socket, "DATA", target.timeoutMs, (code) => code === "354");
+      deliveryStarted = true;
+      await command(reader, socket, formatSmtpMessage(message), target.timeoutMs, (code) => code.startsWith("2"));
+      socket.write("QUIT\r\n", () => undefined);
+    });
+  } catch (error) {
+    throw new SmtpDeliveryError(error instanceof Error ? error.message : "SMTP delivery failed", deliveryStarted);
+  }
 }

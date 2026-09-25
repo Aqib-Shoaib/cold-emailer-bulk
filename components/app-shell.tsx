@@ -12,6 +12,7 @@ import {
   PaperPlaneTilt,
   PauseCircle,
   PlayCircle,
+  Pulse,
   Tray,
   UsersThree,
   X,
@@ -25,9 +26,10 @@ const navigation = [
   { href: "/contacts", label: "Contacts", icon: AddressBook },
   { href: "/campaigns", label: "Campaigns", icon: PaperPlaneTilt },
   { href: "/templates", label: "Templates", icon: FileText },
-  { href: "/inbox", label: "Inbox", icon: Tray, count: 4 },
+  { href: "/inbox", label: "Inbox", icon: Tray },
   { href: "/knowledge", label: "Knowledge", icon: Books },
   { href: "/users", label: "Users", icon: UsersThree },
+  { href: "/operations", label: "Operations", icon: Pulse },
   { href: "/settings", label: "Settings", icon: GearSix },
 ];
 
@@ -104,9 +106,7 @@ export function AppShell({
               className="h-10 w-full rounded-xl border bg-[var(--surface-raised)] pl-10 pr-4 text-sm text-[var(--foreground)] placeholder:text-[var(--subtle)]"
             />
           </div>
-          <span className="ml-auto hidden rounded-lg bg-[var(--accent-soft)] px-2.5 py-1.5 text-xs font-semibold text-[var(--accent-strong)] sm:inline">
-            Preview data
-          </span>
+          <span className="ml-auto" />
           <button
             type="button"
             className="relative grid size-10 place-items-center rounded-xl border bg-[var(--surface-raised)] text-[var(--muted)] hover:text-[var(--foreground)] active:translate-y-px"
@@ -186,7 +186,6 @@ function NavItem({
   href,
   label,
   icon: Icon,
-  count,
   active,
   onClick,
 }: (typeof navigation)[number] & { active: boolean; onClick?: () => void }) {
@@ -203,11 +202,6 @@ function NavItem({
     >
       <Icon aria-hidden size={19} weight={active ? "fill" : "regular"} />
       <span>{label}</span>
-      {count ? (
-        <span className="ml-auto min-w-6 rounded-lg bg-white/10 px-1.5 py-0.5 text-center text-xs text-white">
-          {count}
-        </span>
-      ) : null}
     </Link>
   );
 }
