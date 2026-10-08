@@ -32,19 +32,20 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      APP_URL: ${APP_URL:?Set APP_URL to the public HTTPS origin}
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
       SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?Set SETTINGS_ENCRYPTION_KEY}
     depends_on:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => { if (!r.ok) process.exit(1) })"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => r.json()).then(b => { if (b.checks?.web !== 'ok' || b.checks?.database !== 'ok') process.exit(1) })"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 15s
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
 
   worker:
     image: ${APP_IMAGE:-cold-emailer-app}

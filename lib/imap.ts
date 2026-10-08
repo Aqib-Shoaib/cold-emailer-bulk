@@ -110,7 +110,7 @@ async function associations(references: string[], fromEmail: string) {
   const outbound = references.length
     ? await prisma.emailMessage.findFirst({ where: { messageId: { in: references } }, orderBy: { createdAt: "desc" } })
     : null;
-  if (outbound) return { outbound, contactId: outbound.contactId, campaignId: outbound.campaignId };
+  if (outbound) return { outbound, contactId: outbound.contactId, campaignId: outbound.campaignId, expectedEmail: outbound.toEmail };
 
   const sentReply = references.length
     ? await prisma.inboxReply.findFirst({
@@ -124,11 +124,11 @@ async function associations(references: string[], fromEmail: string) {
     const linkedOutbound = original.outboundMessageId
       ? await prisma.emailMessage.findUnique({ where: { id: original.outboundMessageId } })
       : null;
-    return { outbound: linkedOutbound, contactId: original.contactId, campaignId: original.campaignId };
+    return { outbound: linkedOutbound, contactId: original.contactId, campaignId: original.campaignId, expectedEmail: sentReply.toEmail };
   }
 
   const contact = fromEmail ? await prisma.contact.findUnique({ where: { email: fromEmail } }) : null;
-  return { outbound: null, contactId: contact?.id ?? null, campaignId: null };
+  return { outbound: null, contactId: contact?.id ?? null, campaignId: null, expectedEmail: "" };
 }
 
 export async function storeMessage(folder: string, uidValidity: string, message: FetchMessageObject, raw: Buffer | null, parseError: string, stopOnReply = true) {
@@ -160,15 +160,14 @@ export async function storeMessage(folder: string, uidValidity: string, message:
   const classificationText = `${text}\n${raw?.toString("utf8", 0, 1_000_000) ?? ""}`;
   const classification = parseError
     ? { kind: "REVIEW" as const, bounceEmail: "", reason: `Parsing failed: ${parseError}` }
-    : classifyInbound({ fromEmail, subject: mail.subject ?? "", text: classificationText, headers, hasOutboundReference: Boolean(linked.outbound || linked.campaignId) });
+    : classifyInbound({ fromEmail, subject: mail.subject ?? "", text: classificationText, headers, outboundRecipient: linked.expectedEmail });
 
   let contactId = linked.contactId;
   let campaignId = linked.campaignId;
-  let bouncedOutbound = linked.outbound;
+  const bouncedOutbound = linked.outbound;
   if (classification.kind === "HARD_BOUNCE") {
     const bouncedContact = await prisma.contact.findUnique({ where: { email: classification.bounceEmail } });
     contactId = bouncedContact?.id ?? linked.contactId;
-    bouncedOutbound ??= await prisma.emailMessage.findFirst({ where: { toEmail: classification.bounceEmail }, orderBy: { createdAt: "desc" } });
     campaignId ??= bouncedOutbound?.campaignId ?? null;
   }
 

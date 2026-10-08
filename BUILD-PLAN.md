@@ -837,3 +837,4 @@ Append one short row whenever phase status changes.
 | 2026-09-25 | 10 | Completed | Operations health/recovery UI, alert monitor, retention, structured logs, and PostgreSQL backup/restore integrity drill passed |
 | 2026-09-25 | 11 | Completed | Security, accessibility, retention, and 20,000-contact load gates passed after fixing import timeout, CSV injection, and mobile overflow |
 | 2026-09-25 | 12 | Started | Final container deployment and acceptance run begun; live provider checks and owner launch approval remain external gates |
+| 2026-10-09 | 11 | Security follow-up | Correlated inbound replies/bounces to the addressed outbound recipient, cleared production dependency advisories, pinned the public origin, made degraded health non-200, and bound the app port to loopback |

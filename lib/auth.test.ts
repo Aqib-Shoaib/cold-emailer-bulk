@@ -17,10 +17,18 @@ test("digests opaque session tokens", () => {
 });
 
 test("accepts only matching request origins", () => {
+  const appUrl = process.env.APP_URL;
+  process.env.APP_URL = "https://app.example.com";
   const request = (origin: string, host = "app.example.com") =>
     new Request("https://app.example.com", { headers: { origin, host } });
 
-  assert.equal(isSameOrigin(request("https://app.example.com") as never), true);
-  assert.equal(isSameOrigin(request("https://evil.example") as never), false);
-  assert.equal(requestOrigin(request("https://app.example.com") as never), "https://app.example.com");
+  try {
+    assert.equal(isSameOrigin(request("https://app.example.com") as never), true);
+    assert.equal(isSameOrigin(request("https://evil.example") as never), false);
+    assert.equal(isSameOrigin(request("https://evil.example", "evil.example") as never), false);
+    assert.equal(requestOrigin(request("https://app.example.com") as never), "https://app.example.com");
+  } finally {
+    if (appUrl === undefined) delete process.env.APP_URL;
+    else process.env.APP_URL = appUrl;
+  }
 });

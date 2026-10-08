@@ -10,7 +10,7 @@ test("classifies only strong permanent-delivery evidence as a hard bounce", () =
     subject: "Delivery failed",
     text: "Final-Recipient: rfc822; person@example.test\nAction: failed\nStatus: 5.1.1",
     headers: { "content-type": "multipart/report; report-type=delivery-status" },
-    hasOutboundReference: false,
+    outboundRecipient: "person@example.test",
   });
   assert.equal(hard.kind, "HARD_BOUNCE");
   assert.equal(hard.bounceEmail, "person@example.test");
@@ -20,14 +20,23 @@ test("classifies only strong permanent-delivery evidence as a hard bounce", () =
     subject: "Delivery delayed",
     text: "Final-Recipient: rfc822; person@example.test\nStatus: 4.2.0",
     headers: {},
-    hasOutboundReference: false,
+    outboundRecipient: "person@example.test",
   });
   assert.equal(uncertain.kind, "REVIEW");
+
+  const spoofed = classifyInbound({
+    fromEmail: "mailer-daemon@attacker.test",
+    subject: "Delivery failed",
+    text: "Final-Recipient: rfc822; victim@example.test\nAction: failed\nStatus: 5.1.1",
+    headers: { "content-type": "multipart/report; report-type=delivery-status" },
+  });
+  assert.equal(spoofed.kind, "REVIEW");
 });
 
 test("recognizes automatic and referenced replies", () => {
-  assert.equal(classifyInbound({ fromEmail: "a@example.test", subject: "Out of office", text: "", headers: {}, hasOutboundReference: true }).kind, "AUTO_REPLY");
-  assert.equal(classifyInbound({ fromEmail: "a@example.test", subject: "Re: Hello", text: "Interested", headers: { "x-autoreply": "" }, hasOutboundReference: true }).kind, "REPLY");
+  assert.equal(classifyInbound({ fromEmail: "a@example.test", subject: "Out of office", text: "", headers: {}, outboundRecipient: "a@example.test" }).kind, "AUTO_REPLY");
+  assert.equal(classifyInbound({ fromEmail: "a@example.test", subject: "Re: Hello", text: "Interested", headers: { "x-autoreply": "" }, outboundRecipient: "a@example.test" }).kind, "REPLY");
+  assert.equal(classifyInbound({ fromEmail: "attacker@example.test", subject: "Re: Hello", text: "Interested", headers: {}, outboundRecipient: "a@example.test" }).kind, "UNMATCHED");
 });
 
 test("normalizes identifiers and stores only inert HTML", () => {

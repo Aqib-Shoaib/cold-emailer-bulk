@@ -7,7 +7,7 @@ export interface InboundClassificationInput {
   subject: string;
   text: string;
   headers: Record<string, string>;
-  hasOutboundReference: boolean;
+  outboundRecipient?: string;
 }
 
 export function normalizeMessageId(value: string) {
@@ -48,7 +48,8 @@ export function classifyInbound(input: InboundClassificationInput): { kind: Inbo
   const bounceSender = /(?:mailer-daemon|postmaster)@/.test(from);
   const permanentFailure = /(?:action:\s*failed|status:\s*5\.\d\.\d|permanent failure|delivery (?:has )?failed|undeliverable)/i.test(`${input.text}\n${input.subject}`);
 
-  if (bounceEmail && (deliveryReport || bounceSender) && permanentFailure) {
+  const matchedRecipient = input.outboundRecipient?.toLowerCase() ?? "";
+  if (bounceEmail && bounceEmail === matchedRecipient && (deliveryReport || bounceSender) && permanentFailure) {
     return { kind: "HARD_BOUNCE", bounceEmail, reason: "Recognized permanent delivery failure." };
   }
 
@@ -61,7 +62,7 @@ export function classifyInbound(input: InboundClassificationInput): { kind: Inbo
     return { kind: "AUTO_REPLY", bounceEmail: "", reason: "Automatic response; follow-ups remain unchanged." };
   }
 
-  if (input.hasOutboundReference) return { kind: "REPLY", bounceEmail: "", reason: "Matched to an outbound Message-ID." };
+  if (matchedRecipient && from === matchedRecipient) return { kind: "REPLY", bounceEmail: "", reason: "Matched to an outbound Message-ID and recipient." };
   if (bounceEmail || bounceSender || permanentFailure) {
     return { kind: "REVIEW", bounceEmail, reason: "Possible bounce needs review before suppression." };
   }

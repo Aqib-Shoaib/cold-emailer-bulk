@@ -1010,7 +1010,7 @@ async function TemplatesView({
     <Page>
       <PageHeader
         title="Templates"
-        description="Create clear, reusable messages with safe personalization."
+        description="Write templates yourself or optionally use the separate AI draft assistant. AI is never required."
         action={<Link className={buttonClass(false)} href={`/templates?status=${status === "active" ? "archived" : "active"}`}>{status === "active" ? "View archived" : "View active"}</Link>}
       />
       {message ? <p role={search.error ? "alert" : "status"} className={`rounded-xl px-4 py-3 text-sm ${search.error ? "bg-[var(--danger-soft)] text-[var(--danger)]" : "bg-[var(--accent-soft)] text-[var(--accent-strong)]"}`}>{message}</p> : null}
@@ -1020,7 +1020,7 @@ async function TemplatesView({
       </Panel>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
         <Panel>
-          <SectionTitle title="New template" description="Write plain text; the safe HTML version is generated automatically." />
+          <SectionTitle title="Write a template manually" description="No AI required. Write plain text and the safe HTML version is generated automatically." />
           <TemplateForm action="/api/templates/create" />
         </Panel>
         <Panel>

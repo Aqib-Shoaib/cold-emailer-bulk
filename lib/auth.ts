@@ -26,18 +26,28 @@ export function recoveryThrottleKey(email: string) {
 
 export function isSameOrigin(request: NextRequest) {
   const origin = request.headers.get("origin");
+  const publicOrigin = configuredOrigin();
+  if (process.env.APP_URL && !publicOrigin) return false;
   const expectedHost = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
-  if (!origin || !expectedHost) return false;
+  if (!origin || (!publicOrigin && !expectedHost)) return false;
 
   try {
-    return new URL(origin).host === expectedHost;
+    return publicOrigin ? new URL(origin).origin === publicOrigin : new URL(origin).host === expectedHost;
   } catch {
     return false;
   }
 }
 
 export function requestOrigin(request: NextRequest) {
-  return request.headers.get("origin") ?? request.nextUrl.origin;
+  return configuredOrigin() ?? request.headers.get("origin") ?? request.nextUrl.origin;
+}
+
+function configuredOrigin() {
+  try {
+    return process.env.APP_URL ? new URL(process.env.APP_URL).origin : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function isLoginBlocked(email: string) {
